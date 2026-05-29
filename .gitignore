@@ -1,0 +1,29 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+
+*.pyc
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Uploaded user files and AI results
+app/uploads/submissions/*
+app/uploads/tasks/*
+app/uploads/results/*
+!app/uploads/submissions/.gitkeep
+!app/uploads/tasks/.gitkeep
+!app/uploads/results/.gitkeep
+
+# Local DB / OS / IDE
+*.sqlite3
+*.db
+.DS_Store
+.idea/
+.vscode/

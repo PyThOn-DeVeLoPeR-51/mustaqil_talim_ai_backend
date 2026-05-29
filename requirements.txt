@@ -1,0 +1,17 @@
+fastapi
+uvicorn
+sqlalchemy
+alembic
+psycopg2-binary
+pydantic-settings
+python-jose
+passlib[bcrypt]==1.7.4
+bcrypt==4.0.1
+python-multipart
+email-validator
+opencv-python
+PyMuPDF
+numpy
+pandas
+matplotlib
+Pillow
