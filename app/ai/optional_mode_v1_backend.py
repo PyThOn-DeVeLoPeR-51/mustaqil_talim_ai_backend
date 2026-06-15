@@ -1119,7 +1119,7 @@ def score_orthographic_completeness(role_result: Dict[str, Any], cfg: Dict[str, 
     total = int(s1 + s2 + s3 + s4)
     warnings = [f"{len(extra_orth)} ta ortiqcha orthographic region mavjud yoki roli aniqlanmagan"] if len(extra_orth) > 0 else []
     summary = {
-        "criterion": "Orthographic completeness & arrangement",
+        "criterion": "Proyeksiyalar to‘liqligi va joylashuvi",
         "score": int(total),
         "max_score": 15,
         "subscores": {"view_count": int(s1), "isometric_presence": int(s2), "role_presence": int(s3), "arrangement": int(s4)},
@@ -1419,7 +1419,7 @@ def score_section_hatching(role_result: Dict[str, Any], bundle: Dict[str, np.nda
         errors.append("Hatch diagonallari yetarli darajada parallel emas")
     total = int(min(10, s_presence + s_angle + s_spacing + region_quality_score))
     summary = {
-        "criterion": "Section / hatching quality",
+        "criterion": "Qirqim va shtrixovka sifati",
         "score": int(total),
         "max_score": 10,
         "applicable": True,
@@ -1715,7 +1715,7 @@ def score_dimensions(role_result: Dict[str, Any], layout_result: Dict[str, Any],
     if total_strong_clusters > 0 and mean_outside < 0.62:
         warnings.append("Ba’zi dimension cluster’lar role ichiga juda yaqin tushgan")
     summary = {
-        "criterion": "Dimension evidence & placement",
+        "criterion": "O‘lchamlar mavjudligi va joylashuvi",
         "score": int(total),
         "max_score": 15,
         "subscores": {
@@ -1954,7 +1954,7 @@ def score_line_semantics(role_result: Dict[str, Any], bundle: Dict[str, np.ndarr
     if strong_center_roles == 0 and center_roles >= 1:
         warnings.append("Markaz chiziqlari kuchsiz evidence bilan topildi")
     summary = {
-        "criterion": "Line semantics & drafting conventions",
+        "criterion": "Chiziq semantikasi va chizmachilik qoidalari",
         "score": int(total),
         "max_score": 15,
         "subscores": {
@@ -2095,7 +2095,7 @@ def score_cleanliness(bundle: Dict[str, np.ndarray], layout_result: Dict[str, An
     if s_edge == 0:
         warnings.append("Chizma chetga juda yaqin yoki crop juda tig‘iz")
     summary = {
-        "criterion": "Cleanliness & readability",
+        "criterion": "Chizma tozaligi va o‘qilishi",
         "score": int(total),
         "max_score": 10,
         "subscores": {"sharpness": int(s_sharp), "contrast": int(s_contrast), "background_cleanliness": int(s_bg), "edge_crop_cleanliness": int(s_edge)},
@@ -2198,7 +2198,7 @@ def score_task_compliance(task_text: str, role_result: Dict[str, Any], score2_re
     elif req["requires_dimensions"] and dim_roles == 1:
         warnings.append("O‘lcham evidence bor, lekin faqat bitta ko‘rinishda aniq topildi")
     summary = {
-        "criterion": "Task compliance",
+        "criterion": "Topshiriq talabiga moslik",
         "score": int(total),
         "max_score": 10,
         "requirements": {
