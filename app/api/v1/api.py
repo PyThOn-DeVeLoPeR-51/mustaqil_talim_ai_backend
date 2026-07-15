@@ -1,6 +1,13 @@
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import auth, results, students, submissions, tasks
+from app.api.v1.endpoints import (
+    analytics,
+    auth,
+    results,
+    students,
+    submissions,
+    tasks,
+)
 
 
 api_router = APIRouter()
@@ -33,4 +40,10 @@ api_router.include_router(
     results.router,
     prefix="/results",
     tags=["Results"],
+)
+
+api_router.include_router(
+    analytics.router,
+    prefix="/analytics",
+    tags=["Analytics"],
 )

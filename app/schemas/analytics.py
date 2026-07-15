@@ -1,0 +1,108 @@
+from typing import Literal
+
+from pydantic import BaseModel, Field
+
+
+ExperimentGroup = Literal["experimental", "control"]
+TaskMode = Literal["etalon", "optional"]
+AssessmentStage = Literal["pretest", "intermediate", "posttest"]
+
+
+class AnalyticsSummary(BaseModel):
+    student_count: int = 0
+    evaluated_submission_count: int = 0
+
+    initial_average: float = 0
+    final_average: float = 0
+    growth: float = 0
+
+    second_attempt_growth: float = 0
+    success_rate: float = 0
+
+
+class AnalyticsProgress(BaseModel):
+    labels: list[str] = Field(
+        default_factory=lambda: [
+            "Boshlang‘ich",
+            "1-hafta",
+            "2-hafta",
+            "3-hafta",
+            "4-hafta",
+            "Yakuniy",
+        ]
+    )
+    values: list[float] = Field(default_factory=list)
+
+
+class AnalyticsGroupComparisonItem(BaseModel):
+    label: str
+    before: float = 0
+    after: float = 0
+    count: int = 0
+
+
+class AnalyticsDistributionItem(BaseModel):
+    key: Literal["high", "good", "satisfactory", "low"]
+    label: str
+    value: int = 0
+
+
+class AnalyticsCriteria(BaseModel):
+    labels: list[str] = Field(
+        default_factory=lambda: [
+            "Proyeksiya",
+            "O‘lcham",
+            "Chiziqlar",
+            "Aniqlik",
+            "Standart",
+        ]
+    )
+    values: list[float] = Field(default_factory=list)
+
+
+class AnalyticsHeatmapRow(BaseModel):
+    student_id: int
+    name: str
+    group_name: str | None = None
+    values: list[float] = Field(default_factory=list)
+
+
+class AnalyticsStudentOption(BaseModel):
+    id: int
+    full_name: str
+    group_name: str | None = None
+    experiment_group: ExperimentGroup | None = None
+
+
+class AnalyticsFilterOptions(BaseModel):
+    groups: list[str] = Field(default_factory=list)
+    students: list[AnalyticsStudentOption] = Field(default_factory=list)
+
+    experiment_groups: list[ExperimentGroup] = Field(default_factory=list)
+    modes: list[TaskMode] = Field(default_factory=list)
+
+    topics: list[str] = Field(default_factory=list)
+    week_numbers: list[int] = Field(default_factory=list)
+    assessment_stages: list[AssessmentStage] = Field(default_factory=list)
+    academic_periods: list[str] = Field(default_factory=list)
+
+
+class TeacherAnalyticsRead(BaseModel):
+    summary: AnalyticsSummary
+    progress: AnalyticsProgress
+
+    group_comparison: list[AnalyticsGroupComparisonItem] = Field(
+        default_factory=list
+    )
+
+    distribution: list[AnalyticsDistributionItem] = Field(
+        default_factory=list
+    )
+
+    criteria: AnalyticsCriteria
+
+    heatmap: list[AnalyticsHeatmapRow] = Field(
+        default_factory=list
+    )
+
+    filters: AnalyticsFilterOptions
