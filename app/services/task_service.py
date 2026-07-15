@@ -107,6 +107,10 @@ def build_task_response(db: Session, task: Task) -> dict:
         "teacher_id": task.teacher_id,
         "title": task.title,
         "description": task.description,
+        "topic": task.topic,
+        "week_number": task.week_number,
+        "assessment_stage": task.assessment_stage,
+        "academic_period": task.academic_period,
         "mode": task.mode,
         "reference_file_path": task.reference_file_path,
         "instruction_file_path": task.instruction_file_path,
@@ -122,6 +126,10 @@ def create_task_for_teacher(
     teacher: Teacher,
     title: str,
     description: str | None,
+    topic: str | None,
+    week_number: int | None,
+    assessment_stage: str | None,
+    academic_period: str | None,
     mode: str,
     deadline,
     reference_file_path: str | None,
@@ -140,6 +148,15 @@ def create_task_for_teacher(
             detail="Etalon rejim uchun reference_file yuklash majburiy.",
         )
 
+    if assessment_stage not in {None, "pretest", "intermediate", "posttest"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "assessment_stage faqat 'pretest', "
+                "'intermediate' yoki 'posttest' bo‘lishi mumkin."
+            ),
+        )
+
     ensure_teacher_owns_students(
         db=db,
         teacher_id=teacher.id,
@@ -150,6 +167,10 @@ def create_task_for_teacher(
         teacher_id=teacher.id,
         title=title,
         description=description,
+        topic=topic,
+        week_number=week_number,
+        assessment_stage=assessment_stage,
+        academic_period=academic_period,
         mode=mode,
         reference_file_path=reference_file_path,
         instruction_file_path=instruction_file_path,

@@ -1,8 +1,16 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, String, Text, UniqueConstraint, Boolean, func
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column
-
 from app.db.database import Base
 
 
@@ -19,6 +27,30 @@ class Task(Base):
 
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    topic: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+        index=True,
+    )
+
+    week_number: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+        index=True,
+    )
+
+    assessment_stage: Mapped[str | None] = mapped_column(
+        String(20),
+        nullable=True,
+        index=True,
+    )
+
+    academic_period: Mapped[str | None] = mapped_column(
+        String(100),
+        nullable=True,
+        index=True,
+    )
 
     # "etalon" yoki "optional"
     mode: Mapped[str] = mapped_column(String(20), nullable=False)
