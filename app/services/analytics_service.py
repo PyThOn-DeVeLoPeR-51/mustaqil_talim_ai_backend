@@ -29,9 +29,9 @@ CRITERIA_LABELS = [
 PASSING_SCORE = 56.0
 
 
-def _average(values: list[float]) -> float:
+def _average(values: list[float]) -> float | None:
     if not values:
-        return 0.0
+        return None
 
     return round(sum(values) / len(values), 2)
 
@@ -137,35 +137,63 @@ def _row_scores(
     return scores
 
 
-def _stage_scores(
+def _student_average_map(
+    rows: list[tuple[Submission, Task, Student]],
+) -> dict[int, float]:
+    scores_by_student: dict[int, list[float]] = defaultdict(list)
+
+    for submission, _, student in rows:
+        score = _safe_score(submission.total_score)
+
+        if score is not None:
+            scores_by_student[student.id].append(score)
+
+    result: dict[int, float] = {}
+
+    for student_id, scores in scores_by_student.items():
+        average = _average(scores)
+
+        if average is not None:
+            result[student_id] = average
+
+    return result
+
+
+def _student_averages(
+    rows: list[tuple[Submission, Task, Student]],
+) -> list[float]:
+    return list(_student_average_map(rows).values())
+
+
+def _stage_student_averages(
     rows: list[tuple[Submission, Task, Student]],
     assessment_stage: str,
 ) -> list[float]:
-    selected = [
+    selected_rows = [
         row
         for row in rows
         if row[1].assessment_stage == assessment_stage
     ]
 
-    return _row_scores(selected)
+    return _student_averages(selected_rows)
 
 
-def _week_scores(
+def _week_student_averages(
     rows: list[tuple[Submission, Task, Student]],
     week_number: int,
 ) -> list[float]:
-    selected = [
+    selected_rows = [
         row
         for row in rows
         if row[1].week_number == week_number
     ]
 
-    return _row_scores(selected)
+    return _student_averages(selected_rows)
 
 
 def _second_attempt_growth(
     rows: list[tuple[Submission, Task, Student]],
-) -> float:
+) -> float | None:
     attempts: dict[
         tuple[int, int],
         dict[int, float],
@@ -278,7 +306,7 @@ def _criterion_values_from_modules(
 def _criterion_score(
     submission: Submission,
     aliases: tuple[str, ...],
-) -> float:
+) -> float | None:
     values = _criterion_values_from_table(
         submission=submission,
         aliases=aliases,
@@ -293,8 +321,7 @@ def _criterion_score(
     if values:
         return _average(values)
 
-    fallback = _safe_score(submission.total_score)
-    return fallback or 0.0
+    return _safe_score(submission.total_score)
 
 
 def _build_criteria(
@@ -333,13 +360,16 @@ def _build_criteria(
         ),
     ]
 
-    values: list[float] = []
+    values: list[float | None] = []
 
     for aliases in alias_groups:
-        criterion_scores = [
-            _criterion_score(submission, aliases)
-            for submission, _, _ in rows
-        ]
+        criterion_scores: list[float] = []
+
+        for submission, _, _ in rows:
+            score = _criterion_score(submission, aliases)
+
+            if score is not None:
+                criterion_scores.append(score)
 
         values.append(_average(criterion_scores))
 
@@ -523,15 +553,13 @@ def get_teacher_analytics(
     ]
 
     latest_task_rows = _latest_rows_by_task(rows)
-    latest_student_rows = _latest_rows_by_student(
-        latest_task_rows
-    )
 
-    initial_scores = _stage_scores(
+    initial_scores = _stage_student_averages(
         latest_task_rows,
         "pretest",
     )
-    final_scores = _stage_scores(
+
+    final_scores = _stage_student_averages(
         latest_task_rows,
         "posttest",
     )
@@ -539,32 +567,36 @@ def get_teacher_analytics(
     initial_average = _average(initial_scores)
     final_average = _average(final_scores)
 
-    growth = 0.0
+    growth: float | None = None
 
-    if initial_scores and final_scores:
+    if initial_average is not None and final_average is not None:
         growth = round(final_average - initial_average, 2)
 
-    latest_scores = _row_scores(latest_task_rows)
+    student_average_map = _student_average_map(
+        latest_task_rows
+    )
 
-    success_rate = 0.0
+    evaluated_student_count = len(student_average_map)
 
-    if latest_scores:
+    success_rate: float | None = None
+
+    if evaluated_student_count:
         passed_count = sum(
             score >= PASSING_SCORE
-            for score in latest_scores
+            for score in student_average_map.values()
         )
 
         success_rate = round(
-            passed_count / len(latest_scores) * 100,
+            passed_count / evaluated_student_count * 100,
             2,
         )
 
     progress_values = [
         initial_average,
-        _average(_week_scores(latest_task_rows, 1)),
-        _average(_week_scores(latest_task_rows, 2)),
-        _average(_week_scores(latest_task_rows, 3)),
-        _average(_week_scores(latest_task_rows, 4)),
+        _average(_week_student_averages(latest_task_rows, 1)),
+        _average(_week_student_averages(latest_task_rows, 2)),
+        _average(_week_student_averages(latest_task_rows, 3)),
+        _average(_week_student_averages(latest_task_rows, 4)),
         final_average,
     ]
 
@@ -589,10 +621,16 @@ def get_teacher_analytics(
         group_comparison.append({
             "label": label,
             "before": _average(
-                _stage_scores(group_rows, "pretest")
+                _stage_student_averages(
+                    group_rows,
+                    "pretest",
+                )
             ),
             "after": _average(
-                _stage_scores(group_rows, "posttest")
+                _stage_student_averages(
+                    group_rows,
+                    "posttest",
+                )
             ),
             "count": len(group_students),
         })
@@ -604,12 +642,7 @@ def get_teacher_analytics(
         "low": 0,
     }
 
-    for submission, _, _ in latest_student_rows:
-        score = _safe_score(submission.total_score)
-
-        if score is None:
-            continue
-
+    for score in student_average_map.values():
         if score >= 86:
             distribution_counts["high"] += 1
         elif score >= 71:
@@ -659,16 +692,42 @@ def get_teacher_analytics(
             "student_id": student.id,
             "name": student.full_name,
             "group_name": student.group_name,
-            "values": [
+                        "values": [
                 _average(
-                    _stage_scores(student_rows, "pretest")
+                    _stage_student_averages(
+                        student_rows,
+                        "pretest",
+                    )
                 ),
-                _average(_week_scores(student_rows, 1)),
-                _average(_week_scores(student_rows, 2)),
-                _average(_week_scores(student_rows, 3)),
-                _average(_week_scores(student_rows, 4)),
                 _average(
-                    _stage_scores(student_rows, "posttest")
+                    _week_student_averages(
+                        student_rows,
+                        1,
+                    )
+                ),
+                _average(
+                    _week_student_averages(
+                        student_rows,
+                        2,
+                    )
+                ),
+                _average(
+                    _week_student_averages(
+                        student_rows,
+                        3,
+                    )
+                ),
+                _average(
+                    _week_student_averages(
+                        student_rows,
+                        4,
+                    )
+                ),
+                _average(
+                    _stage_student_averages(
+                        student_rows,
+                        "posttest",
+                    )
                 ),
             ],
         })
@@ -676,13 +735,12 @@ def get_teacher_analytics(
     return {
         "summary": {
             "student_count": len(filtered_students),
+            "evaluated_student_count": evaluated_student_count,
             "evaluated_submission_count": len(rows),
             "initial_average": initial_average,
             "final_average": final_average,
             "growth": growth,
-            "second_attempt_growth": _second_attempt_growth(
-                rows
-            ),
+            "second_attempt_growth": _second_attempt_growth(rows),
             "success_rate": success_rate,
         },
         "progress": {

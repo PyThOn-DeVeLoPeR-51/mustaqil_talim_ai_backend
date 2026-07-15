@@ -10,14 +10,15 @@ AssessmentStage = Literal["pretest", "intermediate", "posttest"]
 
 class AnalyticsSummary(BaseModel):
     student_count: int = 0
+    evaluated_student_count: int = 0
     evaluated_submission_count: int = 0
 
-    initial_average: float = 0
-    final_average: float = 0
-    growth: float = 0
+    initial_average: float | None = None
+    final_average: float | None = None
+    growth: float | None = None
 
-    second_attempt_growth: float = 0
-    success_rate: float = 0
+    second_attempt_growth: float | None = None
+    success_rate: float | None = None
 
 
 class AnalyticsProgress(BaseModel):
@@ -31,13 +32,13 @@ class AnalyticsProgress(BaseModel):
             "Yakuniy",
         ]
     )
-    values: list[float] = Field(default_factory=list)
+    values: list[float | None] = Field(default_factory=list)
 
 
 class AnalyticsGroupComparisonItem(BaseModel):
     label: str
-    before: float = 0
-    after: float = 0
+    before: float | None = None
+    after: float | None = None
     count: int = 0
 
 
@@ -57,14 +58,14 @@ class AnalyticsCriteria(BaseModel):
             "Standart",
         ]
     )
-    values: list[float] = Field(default_factory=list)
+    values: list[float | None] = Field(default_factory=list)
 
 
 class AnalyticsHeatmapRow(BaseModel):
     student_id: int
     name: str
     group_name: str | None = None
-    values: list[float] = Field(default_factory=list)
+    values: list[float | None] = Field(default_factory=list)
 
 
 class AnalyticsStudentOption(BaseModel):
