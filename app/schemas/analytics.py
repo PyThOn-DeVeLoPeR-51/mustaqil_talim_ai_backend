@@ -48,6 +48,14 @@ class AnalyticsDistributionItem(BaseModel):
     value: int = 0
 
 
+class AnalyticsModeComparisonItem(BaseModel):
+    mode: TaskMode
+    label: str
+    average: float | None = None
+    evaluated_student_count: int = 0
+    evaluated_result_count: int = 0
+
+
 class AnalyticsCriteria(BaseModel):
     labels: list[str] = Field(
         default_factory=lambda: [
@@ -97,6 +105,10 @@ class TeacherAnalyticsRead(BaseModel):
     )
 
     distribution: list[AnalyticsDistributionItem] = Field(
+        default_factory=list
+    )
+
+    mode_comparison: list[AnalyticsModeComparisonItem] = Field(
         default_factory=list
     )
 

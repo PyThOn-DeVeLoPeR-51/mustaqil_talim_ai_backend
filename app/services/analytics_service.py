@@ -675,6 +675,27 @@ def get_teacher_analytics(
         },
     ]
 
+    mode_comparison = []
+
+    for mode_key, mode_label in [
+        ("etalon", "Etalon"),
+        ("optional", "Ixtiyoriy"),
+    ]:
+        mode_rows = [
+            row
+            for row in latest_task_rows
+            if _canonical_mode(row[1].mode) == mode_key
+        ]
+        mode_student_averages = _student_average_map(mode_rows)
+
+        mode_comparison.append({
+            "mode": mode_key,
+            "label": mode_label,
+            "average": _average(list(mode_student_averages.values())),
+            "evaluated_student_count": len(mode_student_averages),
+            "evaluated_result_count": len(mode_rows),
+        })
+
     rows_by_student: dict[
         int,
         list[tuple[Submission, Task, Student]],
@@ -692,7 +713,7 @@ def get_teacher_analytics(
             "student_id": student.id,
             "name": student.full_name,
             "group_name": student.group_name,
-                        "values": [
+            "values": [
                 _average(
                     _stage_student_averages(
                         student_rows,
@@ -749,6 +770,7 @@ def get_teacher_analytics(
         },
         "group_comparison": group_comparison,
         "distribution": distribution,
+        "mode_comparison": mode_comparison,
         "criteria": _build_criteria(latest_task_rows),
         "heatmap": heatmap,
         "filters": _build_filter_options(
