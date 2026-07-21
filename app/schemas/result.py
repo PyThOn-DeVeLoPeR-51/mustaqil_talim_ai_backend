@@ -22,6 +22,7 @@ class ResultRead(BaseModel):
 
     uploaded_file_path: str
     uploaded_file_url: str | None = None
+    uploaded_preview_url: str | None = None
 
     total_score: float | None = None
     ai_json_result: dict[str, Any] | None = None

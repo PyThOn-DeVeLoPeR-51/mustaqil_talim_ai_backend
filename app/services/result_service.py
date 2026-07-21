@@ -1,7 +1,7 @@
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.core.files import to_upload_url
+from app.core.files import ensure_file_preview, to_upload_url
 from app.models.student import Student
 from app.models.submission import Submission
 from app.models.task import Task
@@ -13,6 +13,10 @@ def build_result_response(
     task: Task | None = None,
     student: Student | None = None,
 ) -> dict:
+    uploaded_preview_path = ensure_file_preview(
+        submission.uploaded_file_path
+    )
+
     return {
         "id": submission.id,
 
@@ -27,6 +31,7 @@ def build_result_response(
 
         "uploaded_file_path": submission.uploaded_file_path,
         "uploaded_file_url": to_upload_url(submission.uploaded_file_path),
+        "uploaded_preview_url": to_upload_url(uploaded_preview_path),
 
         "total_score": submission.total_score,
         "ai_json_result": submission.ai_json_result,
