@@ -591,3 +591,17 @@ def get_latest_completed_diagnostic_session(
         .order_by(AIMentorDiagnosticSession.version.desc())
         .first()
     )
+
+
+def get_student_diagnostic_sessions(
+    db: Session,
+    student: Student,
+) -> list[AIMentorDiagnosticSession]:
+    """Talabaning diagnostika tarixini eng yangi versiyadan boshlab qaytaradi."""
+
+    return (
+        db.query(AIMentorDiagnosticSession)
+        .filter(AIMentorDiagnosticSession.student_id == student.id)
+        .order_by(AIMentorDiagnosticSession.version.desc())
+        .all()
+    )

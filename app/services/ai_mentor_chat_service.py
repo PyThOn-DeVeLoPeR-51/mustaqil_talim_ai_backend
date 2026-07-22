@@ -12,6 +12,7 @@ from app.schemas.ai_mentor import (
     AIMentorChatSessionCreate,
     AIMentorChatSessionDetail,
     AIMentorChatSessionRead,
+    AIMentorChatSessionUpdate,
 )
 from app.services.ai_mentor_common import http_error, utcnow
 from app.services.ai_mentor_plan_service import (
@@ -199,3 +200,44 @@ def send_mock_chat_message(
         user_message=user_message,
         assistant_message=assistant_message,
     )
+
+
+def get_student_chat_sessions(
+    db: Session,
+    student: Student,
+) -> list[AIMentorChatSession]:
+    """Talabaning chat sessiyalarini so‘nggi faollik bo‘yicha qaytaradi."""
+
+    return (
+        db.query(AIMentorChatSession)
+        .filter(AIMentorChatSession.student_id == student.id)
+        .order_by(
+            func.coalesce(
+                AIMentorChatSession.last_message_at,
+                AIMentorChatSession.created_at,
+            ).desc()
+        )
+        .all()
+    )
+
+
+def update_chat_session(
+    db: Session,
+    student: Student,
+    session_id: int,
+    payload: AIMentorChatSessionUpdate,
+) -> AIMentorChatSession:
+    """Chat nomi, holati yoki kontekstini yangilaydi."""
+
+    chat_session = get_student_chat_session_or_404(
+        db,
+        student,
+        session_id,
+    )
+
+    for field_name, value in payload.model_dump(exclude_unset=True).items():
+        setattr(chat_session, field_name, value)
+
+    db.commit()
+    db.refresh(chat_session)
+    return chat_session

@@ -498,3 +498,17 @@ def update_plan_item_progress(
     db.commit()
     db.refresh(item)
     return item
+
+
+def get_student_plans(
+    db: Session,
+    student: Student,
+) -> list[AIMentorPlan]:
+    """Talabaning reja versiyalarini eng yangisidan boshlab qaytaradi."""
+
+    return (
+        db.query(AIMentorPlan)
+        .filter(AIMentorPlan.student_id == student.id)
+        .order_by(AIMentorPlan.version.desc())
+        .all()
+    )

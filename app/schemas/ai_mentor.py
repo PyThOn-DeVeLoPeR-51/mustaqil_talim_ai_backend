@@ -276,6 +276,13 @@ class AIMentorPlanCreate(BaseModel):
         return self
 
 
+class AIMentorMockPlanCreate(BaseModel):
+    """Yakunlangan diagnostika asosida mock reja yaratish payload'i."""
+
+    diagnostic_session_id: int | None = Field(default=None, gt=0)
+    start_date: date | None = None
+
+
 class AIMentorPlanUpdate(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=255)
     summary: str | None = None
