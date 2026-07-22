@@ -1,5 +1,5 @@
 from fastapi import Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 from sqlalchemy.orm import Session
 
@@ -11,9 +11,25 @@ from app.models.teacher import Teacher
 from app.schemas.teacher import TeacherCreate
 
 
-oauth2_scheme = OAuth2PasswordBearer(
-    tokenUrl=f"{settings.API_V1_PREFIX}/auth/teacher/login"
-)
+bearer_scheme = HTTPBearer(auto_error=False)
+
+
+def get_bearer_token(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+) -> str:
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Token kiritilmagan yoki noto‘g‘ri.",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+    if credentials is None:
+        raise credentials_exception
+
+    if credentials.scheme.lower() != "bearer":
+        raise credentials_exception
+
+    return credentials.credentials
 
 
 def get_teacher_by_email(db: Session, email: str) -> Teacher | None:
@@ -93,7 +109,7 @@ def authenticate_student(
 
 
 def get_current_teacher(
-    token: str = Depends(oauth2_scheme),
+    token: str = Depends(get_bearer_token),
     db: Session = Depends(get_db),
 ) -> Teacher:
     credentials_exception = HTTPException(
@@ -127,7 +143,7 @@ def get_current_teacher(
 
 
 def get_current_student(
-    token: str = Depends(oauth2_scheme),
+    token: str = Depends(get_bearer_token),
     db: Session = Depends(get_db),
 ) -> Student:
     credentials_exception = HTTPException(
