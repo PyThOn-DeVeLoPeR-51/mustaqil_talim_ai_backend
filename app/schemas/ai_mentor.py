@@ -283,6 +283,10 @@ class AIMentorMockPlanCreate(BaseModel):
     start_date: date | None = None
 
 
+class AIMentorPlanGenerateCreate(AIMentorMockPlanCreate):
+    """Sozlangan provider orqali reja yaratish payload'i."""
+
+
 class AIMentorPlanUpdate(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=255)
     summary: str | None = None
@@ -414,3 +418,15 @@ class AIMentorChatResponse(BaseModel):
     session: AIMentorChatSessionRead
     user_message: AIMentorChatMessageRead
     assistant_message: AIMentorChatMessageRead
+
+
+# ---------------------------------------------------------------------------
+# LLM holati
+# ---------------------------------------------------------------------------
+
+
+class AIMentorLLMStatus(BaseModel):
+    provider: str
+    model: str | None = None
+    configured: bool
+    fallback_to_mock: bool

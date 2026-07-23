@@ -1,5 +1,6 @@
 """AI Mentorning 4 haftalik reja va progress biznes mantiqi."""
 
+import logging
 from datetime import date, timedelta
 from typing import Any
 
@@ -7,6 +8,9 @@ from fastapi import status
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
+from app.llm.contracts import LLMProviderError, StructuredLLMResult, PlanGenerationOutput
+from app.llm.factory import get_ai_mentor_provider
 from app.models.ai_mentor import (
     AIMentorDiagnosticSession,
     AIMentorPlan,
@@ -35,6 +39,9 @@ from app.services.ai_mentor_diagnostic_service import (
     get_latest_completed_diagnostic_session,
     get_student_diagnostic_session_or_404,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 def _safe_int(value: Any, default: int) -> int:
@@ -303,12 +310,11 @@ def create_plan_from_payload(
     return plan
 
 
-def create_mock_plan(
+def _resolve_completed_diagnostic_session(
     db: Session,
     student: Student,
-    diagnostic_session_id: int | None = None,
-    start_date_value: date | None = None,
-) -> AIMentorPlanDetailResponse:
+    diagnostic_session_id: int | None,
+) -> AIMentorDiagnosticSession:
     if diagnostic_session_id is None:
         session = get_latest_completed_diagnostic_session(db, student)
         if session is None:
@@ -316,22 +322,156 @@ def create_mock_plan(
                 status.HTTP_409_CONFLICT,
                 "Avval diagnostikani yakunlash kerak.",
             )
-    else:
-        session = get_student_diagnostic_session_or_404(
-            db,
-            student,
-            diagnostic_session_id,
-        )
-        if session.status != "completed":
-            raise http_error(
-                status.HTTP_409_CONFLICT,
-                "Diagnostika hali yakunlanmagan.",
-            )
+        return session
 
+    session = get_student_diagnostic_session_or_404(
+        db,
+        student,
+        diagnostic_session_id,
+    )
+    if session.status != "completed":
+        raise http_error(
+            status.HTTP_409_CONFLICT,
+            "Diagnostika hali yakunlanmagan.",
+        )
+    return session
+
+
+def create_mock_plan(
+    db: Session,
+    student: Student,
+    diagnostic_session_id: int | None = None,
+    start_date_value: date | None = None,
+) -> AIMentorPlanDetailResponse:
+    session = _resolve_completed_diagnostic_session(
+        db,
+        student,
+        diagnostic_session_id,
+    )
     payload = _build_mock_plan_payload(
         session,
         start_date_value or date.today(),
     )
+    plan = create_plan_from_payload(db, student, payload)
+    return build_plan_detail_response(db, plan)
+
+
+def _llm_plan_context(
+    student: Student,
+    session: AIMentorDiagnosticSession,
+) -> dict[str, Any]:
+    return {
+        "student_profile": {
+            "university": student.university,
+            "direction": student.direction,
+            "stage": student.stage,
+            "group_name": student.group_name,
+        },
+        "diagnostic_summary": session.analysis_summary,
+        "diagnostic_analysis": session.analysis_json or {},
+        "constraints": {
+            "weeks": 4,
+            "items_per_week": 3,
+            "language": "uzbek",
+            "progression": "oddiydan murakkabga",
+        },
+    }
+
+
+def _plan_payload_from_llm(
+    result: StructuredLLMResult[PlanGenerationOutput],
+    session: AIMentorDiagnosticSession,
+    start_date_value: date,
+) -> AIMentorPlanCreate:
+    weeks = [
+        AIMentorPlanWeekCreate(
+            week_number=week.week_number,
+            title=week.title,
+            goal=week.goal,
+            description=week.description,
+            expected_outcome=week.expected_outcome,
+            items=[
+                AIMentorPlanItemCreate(
+                    item_order=item.item_order,
+                    day_number=item.day_number,
+                    title=item.title,
+                    description=item.description,
+                    activity_type=item.activity_type,
+                    estimated_minutes=item.estimated_minutes,
+                    resources_json=item.resources or None,
+                )
+                for item in week.items
+            ],
+        )
+        for week in result.output.weeks
+    ]
+
+    return AIMentorPlanCreate(
+        diagnostic_session_id=session.id,
+        title=result.output.title,
+        summary=result.output.summary,
+        status="active",
+        generation_source="llm",
+        generation_metadata={
+            **result.metadata.as_dict(),
+            "diagnostic_session_version": session.version,
+            "strategy_version": "llm-1.0",
+        },
+        start_date=start_date_value,
+        end_date=start_date_value + timedelta(days=27),
+        weeks=weeks,
+    )
+
+
+def create_generated_plan(
+    db: Session,
+    student: Student,
+    diagnostic_session_id: int | None = None,
+    start_date_value: date | None = None,
+) -> AIMentorPlanDetailResponse:
+    """Sozlangan LLM provider orqali reja yaratadi, zarur bo‘lsa mock'ka qaytadi."""
+
+    if settings.LLM_PROVIDER.strip().casefold() == "mock":
+        return create_mock_plan(
+            db,
+            student,
+            diagnostic_session_id=diagnostic_session_id,
+            start_date_value=start_date_value,
+        )
+
+    session = _resolve_completed_diagnostic_session(
+        db,
+        student,
+        diagnostic_session_id,
+    )
+    plan_start_date = start_date_value or date.today()
+
+    try:
+        provider = get_ai_mentor_provider()
+        if provider is None:
+            return create_mock_plan(
+                db,
+                student,
+                diagnostic_session_id=session.id,
+                start_date_value=plan_start_date,
+            )
+        result = provider.generate_plan(_llm_plan_context(student, session))
+        payload = _plan_payload_from_llm(result, session, plan_start_date)
+    except LLMProviderError as exc:
+        logger.warning("Plan LLM fallback: %s", exc.code)
+        if not settings.LLM_FALLBACK_TO_MOCK:
+            raise http_error(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "AI Mentor LLM xizmati vaqtincha reja yarata olmadi.",
+            ) from exc
+
+        payload = _build_mock_plan_payload(session, plan_start_date)
+        payload.generation_metadata = {
+            **(payload.generation_metadata or {}),
+            "fallback_from_provider": settings.LLM_PROVIDER,
+            "fallback_reason": exc.code,
+        }
+
     plan = create_plan_from_payload(db, student, payload)
     return build_plan_detail_response(db, plan)
 

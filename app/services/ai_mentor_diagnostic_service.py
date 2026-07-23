@@ -1,14 +1,18 @@
 """AI Mentor diagnostik savollari, sessiyalari va mock tahlili."""
 
+import logging
 from typing import Any
 
 from fastapi import status
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.data.ai_mentor_diagnostic_questions import (
     AI_MENTOR_DIAGNOSTIC_QUESTIONS,
 )
+from app.llm.contracts import LLMProviderError
+from app.llm.factory import get_ai_mentor_provider
 from app.models.ai_mentor import (
     AIMentorDiagnosticAnswer,
     AIMentorDiagnosticQuestion,
@@ -496,6 +500,80 @@ def _build_mock_diagnostic_analysis(
     return summary, analysis
 
 
+logger = logging.getLogger(__name__)
+
+
+def _diagnostic_llm_context(
+    student: Student,
+    values: dict[str, Any],
+    questions: dict[str, AIMentorDiagnosticQuestion],
+) -> dict[str, Any]:
+    answers: dict[str, Any] = {}
+    for code, value in values.items():
+        question = questions.get(code)
+        answers[code] = {
+            "question": question.question_text if question is not None else code,
+            "answer": _display_answer(question, value),
+            "raw_value": value,
+        }
+
+    return {
+        "student_profile": {
+            "university": student.university,
+            "direction": student.direction,
+            "stage": student.stage,
+            "group_name": student.group_name,
+        },
+        "diagnostic_answers": answers,
+        "task": (
+            "Talabaning mustaqil ta'lim holatini tahlil qiling va amaliy, "
+            "xolis tavsiyalar bering."
+        ),
+    }
+
+
+def _build_diagnostic_analysis(
+    student: Student,
+    values: dict[str, Any],
+    questions: dict[str, AIMentorDiagnosticQuestion],
+) -> tuple[str, dict[str, Any]]:
+    mock_summary, mock_analysis = _build_mock_diagnostic_analysis(values, questions)
+
+    if settings.LLM_PROVIDER.strip().casefold() == "mock":
+        return mock_summary, mock_analysis
+
+    try:
+        provider = get_ai_mentor_provider()
+        if provider is None:
+            return mock_summary, mock_analysis
+
+        result = provider.analyze_diagnostic(
+            _diagnostic_llm_context(student, values, questions)
+        )
+        llm_output = result.output.model_dump()
+        analysis = {
+            **mock_analysis,
+            **llm_output,
+            "provider": result.metadata.provider,
+            "analysis_version": "llm-1.0",
+            "llm_metadata": result.metadata.as_dict(),
+        }
+        return result.output.summary, analysis
+    except LLMProviderError as exc:
+        logger.warning("Diagnostic LLM fallback: %s", exc.code)
+        if not settings.LLM_FALLBACK_TO_MOCK:
+            raise http_error(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "AI Mentor LLM xizmati vaqtincha ishlamayapti.",
+            ) from exc
+
+        mock_analysis["fallback"] = {
+            "from_provider": settings.LLM_PROVIDER,
+            "reason": exc.code,
+        }
+        return mock_summary, mock_analysis
+
+
 def submit_diagnostic_answers(
     db: Session,
     student: Student,
@@ -563,7 +641,8 @@ def submit_diagnostic_answers(
     db.flush()
 
     values, questions = _diagnostic_value_map(db, session.id)
-    analysis_summary, analysis_json = _build_mock_diagnostic_analysis(
+    analysis_summary, analysis_json = _build_diagnostic_analysis(
+        student,
         values,
         questions,
     )

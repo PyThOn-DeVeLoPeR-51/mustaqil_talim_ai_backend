@@ -1,0 +1,271 @@
+"""Groq OpenAI-compatible API asosidagi AI Mentor provider implementatsiyasi.
+
+Groq OpenAI SDK bilan mos HTTP API taqdim etadi. Shu sababli loyiha qo‘shimcha
+SDK o‘rnatmasdan mavjud ``openai`` paketidan foydalanadi, lekin Groq'ning
+``https://api.groq.com/openai/v1`` base URL manziliga ulanadi.
+"""
+
+from __future__ import annotations
+
+import json
+from typing import Any, TypeVar
+
+from pydantic import BaseModel, ValidationError
+
+from app.llm.contracts import (
+    AIMentorLLMProvider,
+    DiagnosticAnalysisOutput,
+    LLMCallMetadata,
+    LLMProviderError,
+    PlanGenerationOutput,
+    StructuredLLMResult,
+    TextLLMResult,
+)
+from app.llm.prompts import (
+    CHAT_SYSTEM_PROMPT,
+    DIAGNOSTIC_SYSTEM_PROMPT,
+    PLAN_SYSTEM_PROMPT,
+)
+
+
+OutputT = TypeVar("OutputT", bound=BaseModel)
+
+GROQ_OPENAI_BASE_URL = "https://api.groq.com/openai/v1"
+
+
+def _strict_json_schema(model_type: type[BaseModel]) -> dict[str, Any]:
+    """Pydantic sxemasini Groq strict Structured Outputs talabiga moslaydi.
+
+    Groq strict mode barcha object maydonlarini ``required`` va
+    ``additionalProperties=false`` ko‘rinishida kutadi. Pydantic default
+    qiymatli maydonlarni optional deb chiqarishi mumkin; provider esa model
+    generatsiyasi uchun ularni ham majburiy qiladi.
+    """
+
+    schema = model_type.model_json_schema()
+
+    def normalize(node: Any) -> None:
+        if isinstance(node, dict):
+            if node.get("type") == "object" or "properties" in node:
+                properties = node.get("properties")
+                if isinstance(properties, dict):
+                    node["required"] = list(properties.keys())
+                node["additionalProperties"] = False
+
+            for value in node.values():
+                normalize(value)
+        elif isinstance(node, list):
+            for value in node:
+                normalize(value)
+
+    normalize(schema)
+    return schema
+
+
+class GroqAIMentorProvider(AIMentorLLMProvider):
+    """Groq'dagi modelni diagnostika, reja va chat uchun ishlatadi."""
+
+    provider_name = "groq"
+
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        model: str,
+        timeout_seconds: float,
+        max_retries: int,
+        max_output_tokens: int,
+        reasoning_effort: str = "medium",
+    ) -> None:
+        if not api_key.strip():
+            raise LLMProviderError("missing_api_key", "Groq API kaliti kiritilmagan.")
+        if not model.strip():
+            raise LLMProviderError("missing_model", "Groq model nomi kiritilmagan.")
+
+        normalized_reasoning = reasoning_effort.strip().casefold()
+        if normalized_reasoning not in {"low", "medium", "high"}:
+            raise LLMProviderError(
+                "invalid_reasoning_effort",
+                "GROQ_REASONING_EFFORT low, medium yoki high bo‘lishi kerak.",
+            )
+
+        try:
+            from openai import OpenAI
+        except (ImportError, AttributeError) as exc:
+            raise LLMProviderError(
+                "sdk_unavailable",
+                "OpenAI Python kutubxonasi o‘rnatilmagan yoki noto‘g‘ri versiyada.",
+            ) from exc
+
+        self._client = OpenAI(
+            api_key=api_key,
+            base_url=GROQ_OPENAI_BASE_URL,
+            timeout=timeout_seconds,
+            max_retries=max_retries,
+        )
+        self.model_name = model.strip()
+        self.max_output_tokens = max_output_tokens
+        self.reasoning_effort = normalized_reasoning
+
+    @staticmethod
+    def _metadata(response: Any, provider: str, model: str) -> LLMCallMetadata:
+        usage = getattr(response, "usage", None)
+        input_tokens = None
+        output_tokens = None
+        total_tokens = None
+        if usage is not None:
+            # Chat Completions nomlari Groq/OpenAI'da prompt/completion ko‘rinishida.
+            input_tokens = getattr(usage, "prompt_tokens", None)
+            output_tokens = getattr(usage, "completion_tokens", None)
+            total_tokens = getattr(usage, "total_tokens", None)
+
+        return LLMCallMetadata(
+            provider=provider,
+            model=model,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            total_tokens=total_tokens,
+            request_id=(
+                getattr(response, "_request_id", None)
+                or getattr(response, "id", None)
+            ),
+        )
+
+    def _structured_response(
+        self,
+        *,
+        instructions: str,
+        context: dict[str, Any],
+        output_type: type[OutputT],
+        schema_name: str,
+    ) -> StructuredLLMResult[OutputT]:
+        try:
+            response = self._client.chat.completions.create(
+                model=self.model_name,
+                messages=[
+                    {"role": "system", "content": instructions},
+                    {
+                        "role": "user",
+                        "content": json.dumps(
+                            context,
+                            ensure_ascii=False,
+                            default=str,
+                        ),
+                    },
+                ],
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": schema_name,
+                        "strict": True,
+                        "schema": _strict_json_schema(output_type),
+                    },
+                },
+                reasoning_effort=self.reasoning_effort,
+                max_completion_tokens=self.max_output_tokens,
+            )
+            choices = getattr(response, "choices", None) or []
+            if not choices:
+                raise LLMProviderError(
+                    "empty_structured_output",
+                    "Groq strukturalangan javob qaytarmadi.",
+                )
+
+            content = str(getattr(choices[0].message, "content", "") or "").strip()
+            if not content:
+                raise LLMProviderError(
+                    "empty_structured_output",
+                    "Groq strukturalangan javob qaytarmadi.",
+                )
+
+            parsed = output_type.model_validate_json(content)
+            return StructuredLLMResult(
+                output=parsed,
+                metadata=self._metadata(
+                    response,
+                    self.provider_name,
+                    self.model_name,
+                ),
+            )
+        except LLMProviderError:
+            raise
+        except ValidationError as exc:
+            raise LLMProviderError(
+                "invalid_structured_output",
+                "Groq javobi kutilgan JSON sxemasiga mos kelmadi.",
+            ) from exc
+        except Exception as exc:
+            raise LLMProviderError(
+                "provider_request_failed",
+                "Groq xizmatiga so‘rov yuborishda xatolik yuz berdi.",
+            ) from exc
+
+    def analyze_diagnostic(
+        self,
+        context: dict[str, Any],
+    ) -> StructuredLLMResult[DiagnosticAnalysisOutput]:
+        return self._structured_response(
+            instructions=DIAGNOSTIC_SYSTEM_PROMPT,
+            context=context,
+            output_type=DiagnosticAnalysisOutput,
+            schema_name="ai_mentor_diagnostic_analysis",
+        )
+
+    def generate_plan(
+        self,
+        context: dict[str, Any],
+    ) -> StructuredLLMResult[PlanGenerationOutput]:
+        return self._structured_response(
+            instructions=PLAN_SYSTEM_PROMPT,
+            context=context,
+            output_type=PlanGenerationOutput,
+            schema_name="ai_mentor_four_week_plan",
+        )
+
+    def chat_reply(self, context: dict[str, Any]) -> TextLLMResult:
+        try:
+            response = self._client.chat.completions.create(
+                model=self.model_name,
+                messages=[
+                    {"role": "system", "content": CHAT_SYSTEM_PROMPT},
+                    {
+                        "role": "user",
+                        "content": json.dumps(
+                            context,
+                            ensure_ascii=False,
+                            default=str,
+                        ),
+                    },
+                ],
+                reasoning_effort=self.reasoning_effort,
+                max_completion_tokens=self.max_output_tokens,
+            )
+            choices = getattr(response, "choices", None) or []
+            if not choices:
+                raise LLMProviderError(
+                    "empty_text_output",
+                    "Groq chat javobi bo‘sh qaytdi.",
+                )
+
+            text = str(getattr(choices[0].message, "content", "") or "").strip()
+            if not text:
+                raise LLMProviderError(
+                    "empty_text_output",
+                    "Groq chat javobi bo‘sh qaytdi.",
+                )
+
+            return TextLLMResult(
+                text=text,
+                metadata=self._metadata(
+                    response,
+                    self.provider_name,
+                    self.model_name,
+                ),
+            )
+        except LLMProviderError:
+            raise
+        except Exception as exc:
+            raise LLMProviderError(
+                "provider_request_failed",
+                "Groq xizmatiga so‘rov yuborishda xatolik yuz berdi.",
+            ) from exc

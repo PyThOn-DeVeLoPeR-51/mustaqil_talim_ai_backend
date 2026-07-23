@@ -16,3 +16,4 @@ pandas
 matplotlib
 Pillow
 httpx
+openai>=2.15.0,<3.0.0

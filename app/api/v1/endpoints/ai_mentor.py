@@ -17,8 +17,10 @@ from app.schemas.ai_mentor import (
     AIMentorDiagnosticSessionCreate,
     AIMentorDiagnosticSessionDetail,
     AIMentorDiagnosticSessionRead,
+    AIMentorLLMStatus,
     AIMentorMockPlanCreate,
     AIMentorPlanDetailResponse,
+    AIMentorPlanGenerateCreate,
     AIMentorPlanItemProgressUpdate,
     AIMentorPlanItemRead,
     AIMentorPlanRead,
@@ -28,17 +30,19 @@ from app.services.ai_mentor_service import (
     build_diagnostic_session_detail,
     build_plan_detail_response,
     create_chat_session,
+    create_generated_plan,
     create_mock_plan,
     get_active_diagnostic_questions,
     get_active_or_latest_plan,
     get_latest_completed_diagnostic_session,
+    get_llm_provider_status,
     get_student_chat_session_or_404,
     get_student_chat_sessions,
     get_student_diagnostic_session_or_404,
     get_student_diagnostic_sessions,
     get_student_plan_or_404,
     get_student_plans,
-    send_mock_chat_message,
+    send_chat_message as send_chat_message_service,
     start_diagnostic_session,
     submit_diagnostic_answers,
     update_chat_session,
@@ -48,6 +52,17 @@ from app.services.auth_service import get_current_student
 
 
 router = APIRouter()
+
+
+@router.get(
+    "/llm/status",
+    response_model=AIMentorLLMStatus,
+)
+def get_llm_status(
+    current_student: Student = Depends(get_current_student),
+):
+    del current_student
+    return get_llm_provider_status()
 
 
 # ---------------------------------------------------------------------------
@@ -146,6 +161,24 @@ def submit_answers(
 # ---------------------------------------------------------------------------
 # 4 haftalik reja
 # ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/plans/generate",
+    response_model=AIMentorPlanDetailResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def generate_plan(
+    payload: AIMentorPlanGenerateCreate,
+    db: Session = Depends(get_db),
+    current_student: Student = Depends(get_current_student),
+):
+    return create_generated_plan(
+        db,
+        current_student,
+        diagnostic_session_id=payload.diagnostic_session_id,
+        start_date_value=payload.start_date,
+    )
 
 
 @router.post(
@@ -291,13 +324,13 @@ def patch_chat_session(
     response_model=AIMentorChatResponse,
     status_code=status.HTTP_201_CREATED,
 )
-def send_chat_message(
+def send_chat_message_endpoint(
     session_id: int,
     payload: AIMentorChatRequest,
     db: Session = Depends(get_db),
     current_student: Student = Depends(get_current_student),
 ):
-    return send_mock_chat_message(
+    return send_chat_message_service(
         db,
         current_student,
         session_id,

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.core.config import settings
+
 import importlib.util
 import os
 import sys
@@ -79,6 +81,12 @@ from app.services.auth_service import get_current_student
 
 class AIMentorAPITestCase(unittest.TestCase):
     def setUp(self) -> None:
+        self.original_llm_provider = settings.LLM_PROVIDER
+        self.original_llm_fallback = settings.LLM_FALLBACK_TO_MOCK
+
+        settings.LLM_PROVIDER = "mock"
+        settings.LLM_FALLBACK_TO_MOCK = True
+
         self.engine = create_engine(
             "sqlite+pysqlite:///:memory:",
             connect_args={"check_same_thread": False},
@@ -121,6 +129,9 @@ class AIMentorAPITestCase(unittest.TestCase):
         self.client = TestClient(app)
 
     def tearDown(self) -> None:
+        settings.LLM_PROVIDER = self.original_llm_provider
+        settings.LLM_FALLBACK_TO_MOCK = self.original_llm_fallback
+
         self.client.close()
         self.db.close()
         self.engine.dispose()
@@ -169,6 +180,11 @@ class AIMentorAPITestCase(unittest.TestCase):
         }
 
     def test_full_mock_api_flow(self) -> None:
+        status_response = self.client.get("/ai-mentor/llm/status")
+        self.assertEqual(status_response.status_code, 200)
+        self.assertEqual(status_response.json()["provider"], "mock")
+        self.assertTrue(status_response.json()["configured"])
+
         questions_response = self.client.get("/ai-mentor/diagnostic/questions")
         self.assertEqual(questions_response.status_code, 200)
         questions = questions_response.json()
@@ -195,7 +211,7 @@ class AIMentorAPITestCase(unittest.TestCase):
         self.assertEqual(latest_response.json()["id"], diagnostic_session_id)
 
         plan_response = self.client.post(
-            "/ai-mentor/plans/mock",
+            "/ai-mentor/plans/generate",
             json={
                 "diagnostic_session_id": diagnostic_session_id,
                 "start_date": "2026-07-22",

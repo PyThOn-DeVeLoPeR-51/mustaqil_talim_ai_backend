@@ -1,10 +1,21 @@
-"""AI Mentor chat sessiyalari, xabarlar tarixi va mock javoblari."""
+"""AI Mentor chat sessiyalari, xabarlar tarixi va LLM/mock javoblari."""
+
+import logging
+from typing import Any
 
 from fastapi import status
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.models.ai_mentor import AIMentorChatMessage, AIMentorChatSession
+from app.core.config import settings
+from app.llm.contracts import LLMProviderError
+from app.llm.factory import get_ai_mentor_provider
+from app.models.ai_mentor import (
+    AIMentorChatMessage,
+    AIMentorChatSession,
+    AIMentorPlanItem,
+    AIMentorPlanWeek,
+)
 from app.models.student import Student
 from app.schemas.ai_mentor import (
     AIMentorChatMessageCreate,
@@ -15,11 +26,17 @@ from app.schemas.ai_mentor import (
     AIMentorChatSessionUpdate,
 )
 from app.services.ai_mentor_common import http_error, utcnow
+from app.services.ai_mentor_diagnostic_service import (
+    get_latest_completed_diagnostic_session,
+)
 from app.services.ai_mentor_plan_service import (
     calculate_plan_progress,
     get_active_or_latest_plan,
     get_student_plan_or_404,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 def create_chat_session(
@@ -160,6 +177,150 @@ def _mock_chat_reply(
     )
 
 
+def _chat_history_context(
+    db: Session,
+    session_id: int,
+) -> list[dict[str, Any]]:
+    messages = (
+        db.query(AIMentorChatMessage)
+        .filter(AIMentorChatMessage.session_id == session_id)
+        .order_by(AIMentorChatMessage.sequence_number.desc())
+        .limit(settings.LLM_MAX_CHAT_HISTORY)
+        .all()
+    )
+    messages.reverse()
+    return [
+        {
+            "role": message.role,
+            "content": message.content,
+            "sequence_number": message.sequence_number,
+        }
+        for message in messages
+    ]
+
+
+def _plan_context(
+    db: Session,
+    student: Student,
+    chat_session: AIMentorChatSession,
+) -> dict[str, Any] | None:
+    if chat_session.plan_id is not None:
+        plan = get_student_plan_or_404(db, student, chat_session.plan_id)
+    else:
+        plan = get_active_or_latest_plan(db, student)
+
+    if plan is None:
+        return None
+
+    progress = calculate_plan_progress(db, plan.id)
+    weeks = (
+        db.query(AIMentorPlanWeek)
+        .filter(AIMentorPlanWeek.plan_id == plan.id)
+        .order_by(AIMentorPlanWeek.week_number.asc())
+        .all()
+    )
+    week_data: list[dict[str, Any]] = []
+    for week in weeks:
+        items = (
+            db.query(AIMentorPlanItem)
+            .filter(AIMentorPlanItem.plan_week_id == week.id)
+            .order_by(AIMentorPlanItem.item_order.asc())
+            .all()
+        )
+        week_data.append(
+            {
+                "week_number": week.week_number,
+                "title": week.title,
+                "goal": week.goal,
+                "items": [
+                    {
+                        "title": item.title,
+                        "description": item.description,
+                        "status": item.status,
+                        "estimated_minutes": item.estimated_minutes,
+                    }
+                    for item in items
+                ],
+            }
+        )
+
+    return {
+        "title": plan.title,
+        "summary": plan.summary,
+        "generation_source": plan.generation_source,
+        "progress": progress.model_dump(),
+        "weeks": week_data,
+    }
+
+
+def _llm_chat_context(
+    db: Session,
+    student: Student,
+    chat_session: AIMentorChatSession,
+    content: str,
+) -> dict[str, Any]:
+    diagnostic = get_latest_completed_diagnostic_session(db, student)
+    return {
+        "student_profile": {
+            "university": student.university,
+            "direction": student.direction,
+            "stage": student.stage,
+            "group_name": student.group_name,
+        },
+        "diagnostic": (
+            {
+                "summary": diagnostic.analysis_summary,
+                "analysis": diagnostic.analysis_json or {},
+            }
+            if diagnostic is not None
+            else None
+        ),
+        "plan": _plan_context(db, student, chat_session),
+        "chat_context": chat_session.context_json or {},
+        "recent_messages": _chat_history_context(db, chat_session.id),
+        "student_message": content,
+    }
+
+
+def _persist_chat_exchange(
+    db: Session,
+    chat_session: AIMentorChatSession,
+    *,
+    user_content: str,
+    assistant_content: str,
+    model_name: str,
+    token_count: int | None,
+    metadata: dict[str, Any],
+) -> AIMentorChatResponse:
+    user_message = _add_chat_message_without_commit(
+        db,
+        chat_session,
+        AIMentorChatMessageCreate(role="user", content=user_content),
+    )
+    assistant_message = _add_chat_message_without_commit(
+        db,
+        chat_session,
+        AIMentorChatMessageCreate(
+            role="assistant",
+            content=assistant_content,
+            model_name=model_name,
+            token_count=token_count,
+            metadata_json=metadata,
+        ),
+    )
+
+    db.commit()
+    db.refresh(chat_session)
+    db.refresh(user_message)
+    db.refresh(assistant_message)
+
+    return AIMentorChatResponse(
+        session=AIMentorChatSessionRead.model_validate(chat_session),
+        user_message=user_message,
+        assistant_message=assistant_message,
+    )
+
+
 def send_mock_chat_message(
     db: Session,
     student: Student,
@@ -174,31 +335,70 @@ def send_mock_chat_message(
             "Yopilgan yoki arxivlangan chatga xabar yuborib bo‘lmaydi.",
         )
 
-    user_message = _add_chat_message_without_commit(
+    return _persist_chat_exchange(
         db,
         chat_session,
-        AIMentorChatMessageCreate(role="user", content=content),
+        user_content=content,
+        assistant_content=_mock_chat_reply(db, student, content),
+        model_name="mock-ai-mentor-v1",
+        token_count=None,
+        metadata={"provider": "mock"},
     )
-    assistant_message = _add_chat_message_without_commit(
+
+
+def send_chat_message(
+    db: Session,
+    student: Student,
+    session_id: int,
+    content: str,
+) -> AIMentorChatResponse:
+    """Sozlangan provider orqali chat javobi yaratadi, zarur bo‘lsa mock'ka qaytadi."""
+
+    chat_session = get_student_chat_session_or_404(db, student, session_id)
+    if chat_session.status != "active":
+        raise http_error(
+            status.HTTP_409_CONFLICT,
+            "Yopilgan yoki arxivlangan chatga xabar yuborib bo‘lmaydi.",
+        )
+
+    if settings.LLM_PROVIDER.strip().casefold() == "mock":
+        return send_mock_chat_message(db, student, session_id, content)
+
+    try:
+        provider = get_ai_mentor_provider()
+        if provider is None:
+            return send_mock_chat_message(db, student, session_id, content)
+        result = provider.chat_reply(
+            _llm_chat_context(db, student, chat_session, content)
+        )
+        assistant_content = result.text
+        model_name = result.metadata.model
+        token_count = result.metadata.total_tokens
+        metadata = result.metadata.as_dict()
+    except LLMProviderError as exc:
+        logger.warning("Chat LLM fallback: %s", exc.code)
+        if not settings.LLM_FALLBACK_TO_MOCK:
+            raise http_error(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "AI Mentor LLM xizmati vaqtincha javob bera olmadi.",
+            ) from exc
+        assistant_content = _mock_chat_reply(db, student, content)
+        model_name = "mock-ai-mentor-v1"
+        token_count = None
+        metadata = {
+            "provider": "mock",
+            "fallback_from_provider": settings.LLM_PROVIDER,
+            "fallback_reason": exc.code,
+        }
+
+    return _persist_chat_exchange(
         db,
         chat_session,
-        AIMentorChatMessageCreate(
-            role="assistant",
-            content=_mock_chat_reply(db, student, content),
-            model_name="mock-ai-mentor-v1",
-            metadata_json={"provider": "mock"},
-        ),
-    )
-
-    db.commit()
-    db.refresh(chat_session)
-    db.refresh(user_message)
-    db.refresh(assistant_message)
-
-    return AIMentorChatResponse(
-        session=AIMentorChatSessionRead.model_validate(chat_session),
-        user_message=user_message,
-        assistant_message=assistant_message,
+        user_content=content,
+        assistant_content=assistant_content,
+        model_name=model_name,
+        token_count=token_count,
+        metadata=metadata,
     )
 
 

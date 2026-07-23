@@ -1,0 +1,314 @@
+from __future__ import annotations
+
+import os
+import unittest
+from datetime import date
+from unittest.mock import patch
+
+os.environ.setdefault("DATABASE_URL", "sqlite+pysqlite:///:memory:")
+os.environ.setdefault("SECRET_KEY", "test-secret-key")
+
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import StaticPool
+
+from app.core.config import settings
+from app.db.base import Base
+from app.llm.contracts import (
+    DiagnosticAnalysisOutput,
+    LLMCallMetadata,
+    LLMProviderError,
+    PlanGenerationOutput,
+    PlanItemOutput,
+    PlanWeekOutput,
+    StructuredLLMResult,
+    TextLLMResult,
+)
+from app.models.ai_mentor import AIMentorDiagnosticQuestion
+from app.models.student import Student
+from app.models.teacher import Teacher
+from app.schemas.ai_mentor import (
+    AIMentorChatSessionCreate,
+    AIMentorDiagnosticAnswerCreate,
+    AIMentorDiagnosticAnswersSubmit,
+)
+from app.services.ai_mentor_service import (
+    create_chat_session,
+    create_generated_plan,
+    seed_diagnostic_questions,
+    send_chat_message,
+    start_diagnostic_session,
+    submit_diagnostic_answers,
+)
+
+
+class FakeLLMProvider:
+    provider_name = "openai"
+    model_name = "fake-test-model"
+
+    @staticmethod
+    def _metadata(total_tokens: int) -> LLMCallMetadata:
+        return LLMCallMetadata(
+            provider="openai",
+            model="fake-test-model",
+            input_tokens=total_tokens - 20,
+            output_tokens=20,
+            total_tokens=total_tokens,
+            request_id="fake-request-id",
+        )
+
+    def analyze_diagnostic(self, context):
+        del context
+        return StructuredLLMResult(
+            output=DiagnosticAnalysisOutput(
+                summary=(
+                    "Talaba muhandislik grafikasi bo‘yicha muntazam amaliyotga tayyor, "
+                    "ammo vaqtni rejalashtirishni kuchaytirishi kerak."
+                ),
+                risk_level="low",
+                strengths=["Motivatsiya yuqori", "Amaliy mashqlarga qiziqadi"],
+                improvement_areas=["Vaqtni boshqarish"],
+                recommended_strategies=[
+                    "Haftalik jadval tuzish",
+                    "Har mashg‘ulot oxirida o‘zini tekshirish",
+                ],
+                focus_topic="Muhandislik grafikasi",
+                weekly_hours=6,
+                session_minutes=30,
+            ),
+            metadata=self._metadata(120),
+        )
+
+    def generate_plan(self, context):
+        del context
+        weeks = []
+        for week_number in range(1, 5):
+            items = [
+                PlanItemOutput(
+                    item_order=item_order,
+                    day_number=(item_order - 1) * 2 + 1,
+                    title=f"{week_number}-hafta {item_order}-vazifa",
+                    description=(
+                        "Muhandislik grafikasi bo‘yicha aniq amaliy topshiriqni "
+                        "bosqichma-bosqich bajaring va natijani tekshiring."
+                    ),
+                    activity_type="practice",
+                    estimated_minutes=30,
+                    resources=["Kurs materiali"],
+                )
+                for item_order in range(1, 4)
+            ]
+            weeks.append(
+                PlanWeekOutput(
+                    week_number=week_number,
+                    title=f"{week_number}-hafta rejasi",
+                    goal="Nazariya va amaliyotni izchil mustahkamlash.",
+                    description="Hafta davomida uchta kichik va o‘lchanadigan vazifa bajariladi.",
+                    expected_outcome="Talaba haftalik mavzuni mustaqil qo‘llay oladi.",
+                    items=items,
+                )
+            )
+        return StructuredLLMResult(
+            output=PlanGenerationOutput(
+                title="LLM yaratgan 4 haftalik reja",
+                summary="Diagnostika natijasiga mos shaxsiy o‘quv rejasi.",
+                weeks=weeks,
+            ),
+            metadata=self._metadata(450),
+        )
+
+    def chat_reply(self, context):
+        del context
+        return TextLLMResult(
+            text=(
+                "Bugun birinchi bajarilmagan vazifani tanlang, 30 daqiqalik taymer "
+                "qo‘ying va oxirida natijani mezonlar bo‘yicha tekshiring."
+            ),
+            metadata=self._metadata(80),
+        )
+
+
+class FailingLLMProvider(FakeLLMProvider):
+    def analyze_diagnostic(self, context):
+        del context
+        raise LLMProviderError("provider_request_failed", "test failure")
+
+
+class AIMentorLLMTestCase(unittest.TestCase):
+    def setUp(self) -> None:
+        self.original_provider = settings.LLM_PROVIDER
+        self.original_fallback = settings.LLM_FALLBACK_TO_MOCK
+        settings.LLM_PROVIDER = "openai"
+        settings.LLM_FALLBACK_TO_MOCK = False
+
+        self.engine = create_engine(
+            "sqlite+pysqlite:///:memory:",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        Base.metadata.create_all(self.engine)
+        session_factory = sessionmaker(bind=self.engine, expire_on_commit=False)
+        self.db: Session = session_factory()
+
+        teacher = Teacher(
+            first_name="LLM",
+            last_name="Teacher",
+            email="llm-teacher@example.com",
+            password_hash="hash",
+        )
+        self.db.add(teacher)
+        self.db.flush()
+        self.student = Student(
+            teacher_id=teacher.id,
+            full_name="LLM Student",
+            login="llm_student",
+            password_hash="hash",
+            is_active=True,
+            direction="Muhandislik grafikasi",
+        )
+        self.db.add(self.student)
+        self.db.commit()
+        self.db.refresh(self.student)
+
+    def tearDown(self) -> None:
+        settings.LLM_PROVIDER = self.original_provider
+        settings.LLM_FALLBACK_TO_MOCK = self.original_fallback
+        self.db.close()
+        self.engine.dispose()
+
+    def _answer_payload(self) -> AIMentorDiagnosticAnswersSubmit:
+        seed_diagnostic_questions(self.db)
+        questions = {
+            question.question_code: question
+            for question in self.db.query(AIMentorDiagnosticQuestion).all()
+        }
+        return AIMentorDiagnosticAnswersSubmit(
+            answers=[
+                AIMentorDiagnosticAnswerCreate(
+                    question_id=questions["primary_goal"].id,
+                    answer_json="deep_learning",
+                ),
+                AIMentorDiagnosticAnswerCreate(
+                    question_id=questions["current_level"].id,
+                    answer_json="intermediate",
+                ),
+                AIMentorDiagnosticAnswerCreate(
+                    question_id=questions["difficult_areas"].id,
+                    answer_json=["time_management", "practice"],
+                ),
+                AIMentorDiagnosticAnswerCreate(
+                    question_id=questions["weekly_hours"].id,
+                    answer_json=6,
+                ),
+                AIMentorDiagnosticAnswerCreate(
+                    question_id=questions["learning_formats"].id,
+                    answer_json=["practice", "video"],
+                ),
+                AIMentorDiagnosticAnswerCreate(
+                    question_id=questions["study_days"].id,
+                    answer_json=["monday", "wednesday", "saturday"],
+                ),
+                AIMentorDiagnosticAnswerCreate(
+                    question_id=questions["session_minutes"].id,
+                    answer_json=30,
+                ),
+                AIMentorDiagnosticAnswerCreate(
+                    question_id=questions["motivation_level"].id,
+                    answer_json=8,
+                ),
+                AIMentorDiagnosticAnswerCreate(
+                    question_id=questions["focus_topic"].id,
+                    answer_text="Muhandislik grafikasi",
+                ),
+            ]
+        )
+
+    def test_full_llm_flow_without_network(self) -> None:
+        provider = FakeLLMProvider()
+        seed_diagnostic_questions(self.db)
+        diagnostic_session = start_diagnostic_session(self.db, self.student)
+
+        with patch(
+            "app.services.ai_mentor_diagnostic_service.get_ai_mentor_provider",
+            return_value=provider,
+        ):
+            diagnostic = submit_diagnostic_answers(
+                self.db,
+                self.student,
+                diagnostic_session.id,
+                self._answer_payload(),
+            )
+
+        self.assertEqual(diagnostic.analysis_json["provider"], "openai")
+        self.assertEqual(
+            diagnostic.analysis_json["llm_metadata"]["total_tokens"],
+            120,
+        )
+
+        with patch(
+            "app.services.ai_mentor_plan_service.get_ai_mentor_provider",
+            return_value=provider,
+        ):
+            plan_response = create_generated_plan(
+                self.db,
+                self.student,
+                diagnostic_session_id=diagnostic.id,
+                start_date_value=date(2026, 7, 22),
+            )
+
+        self.assertEqual(plan_response.plan.generation_source, "llm")
+        self.assertEqual(len(plan_response.plan.weeks), 4)
+        self.assertEqual(plan_response.progress.total_items, 12)
+        self.assertEqual(
+            plan_response.plan.generation_metadata["total_tokens"],
+            450,
+        )
+
+        chat_session = create_chat_session(
+            self.db,
+            self.student,
+            AIMentorChatSessionCreate(plan_id=plan_response.plan.id),
+        )
+        with patch(
+            "app.services.ai_mentor_chat_service.get_ai_mentor_provider",
+            return_value=provider,
+        ):
+            response = send_chat_message(
+                self.db,
+                self.student,
+                chat_session.id,
+                "Bugungi vazifani qanday boshlayman?",
+            )
+
+        self.assertEqual(response.assistant_message.model_name, "fake-test-model")
+        self.assertEqual(response.assistant_message.token_count, 80)
+        self.assertEqual(
+            response.assistant_message.metadata_json["provider"],
+            "openai",
+        )
+
+    def test_diagnostic_falls_back_to_mock(self) -> None:
+        settings.LLM_FALLBACK_TO_MOCK = True
+        seed_diagnostic_questions(self.db)
+        diagnostic_session = start_diagnostic_session(self.db, self.student)
+
+        with patch(
+            "app.services.ai_mentor_diagnostic_service.get_ai_mentor_provider",
+            return_value=FailingLLMProvider(),
+        ):
+            diagnostic = submit_diagnostic_answers(
+                self.db,
+                self.student,
+                diagnostic_session.id,
+                self._answer_payload(),
+            )
+
+        self.assertEqual(diagnostic.analysis_json["provider"], "mock")
+        self.assertEqual(
+            diagnostic.analysis_json["fallback"]["reason"],
+            "provider_request_failed",
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()
