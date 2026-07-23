@@ -49,3 +49,7 @@ javob qaytaradi.
 
 Agar Groq rate limit, timeout yoki boshqa provider xatosi qaytarsa va
 `LLM_FALLBACK_TO_MOCK=true` bo‘lsa, AI Mentor avtomatik mock javobga qaytadi.
+
+## Structured plan fallback
+
+Groq strict JSON Schema rejimi vaqtincha 400/json_validate_failed yoki boshqa provider xatosini qaytarsa, provider endi darhol mock rejaga tushmaydi. Avval o‘sha Groq modelining JSON Object Mode rejimida ikki marta qayta urinadi va natijani Pydantic bilan tekshiradi. Faqat real Groq urinishlari ham muvaffaqiyatsiz bo‘lsa, service darajasidagi mock fallback ishlaydi.

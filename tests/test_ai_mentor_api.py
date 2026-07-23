@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from app.core.config import settings
-
 import importlib.util
 import os
 import sys
@@ -81,12 +79,6 @@ from app.services.auth_service import get_current_student
 
 class AIMentorAPITestCase(unittest.TestCase):
     def setUp(self) -> None:
-        self.original_llm_provider = settings.LLM_PROVIDER
-        self.original_llm_fallback = settings.LLM_FALLBACK_TO_MOCK
-
-        settings.LLM_PROVIDER = "mock"
-        settings.LLM_FALLBACK_TO_MOCK = True
-
         self.engine = create_engine(
             "sqlite+pysqlite:///:memory:",
             connect_args={"check_same_thread": False},
@@ -129,9 +121,6 @@ class AIMentorAPITestCase(unittest.TestCase):
         self.client = TestClient(app)
 
     def tearDown(self) -> None:
-        settings.LLM_PROVIDER = self.original_llm_provider
-        settings.LLM_FALLBACK_TO_MOCK = self.original_llm_fallback
-
         self.client.close()
         self.db.close()
         self.engine.dispose()

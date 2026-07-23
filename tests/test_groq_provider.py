@@ -6,7 +6,7 @@ import types
 import unittest
 from unittest.mock import patch
 
-from app.llm.contracts import DiagnosticAnalysisOutput
+from app.llm.contracts import DiagnosticAnalysisOutput, PlanGenerationOutput
 from app.llm.groq_provider import GROQ_OPENAI_BASE_URL, GroqAIMentorProvider
 
 
@@ -65,6 +65,63 @@ class FakeOpenAI:
         FakeOpenAI.last_instance = self
 
 
+class StrictFailThenJsonObjectCompletions:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        response_format = kwargs.get("response_format") or {}
+        if response_format.get("type") == "json_schema":
+            raise RuntimeError("400 json_validate_failed")
+
+        content = json.dumps(
+            {
+                "title": "4 haftalik shaxsiy mustaqil ta'lim rejasi",
+                "summary": "Diagnostika asosida bosqichma-bosqich tuzilgan individual reja.",
+                "weeks": [
+                    {
+                        "week_number": week,
+                        "title": f"{week}-hafta",
+                        "goal": "Mavzuni nazariya va amaliyot orqali izchil o‘zlashtirish.",
+                        "description": "Hafta davomida qisqa nazariya, mashq va o‘zini tekshirish bajariladi.",
+                        "expected_outcome": "Talaba mavzuni tushuntirib, mustaqil mashq bajara oladi.",
+                        "items": [
+                            {
+                                "item_order": item,
+                                "day_number": min(7, item * 2),
+                                "title": f"{week}.{item} vazifa",
+                                "description": "Mavzu bo‘yicha aniq va o‘lchanadigan mustaqil mashqni bajaring.",
+                                "activity_type": "practice",
+                                "estimated_minutes": 30,
+                                "resources": ["Kurs materiali"],
+                            }
+                            for item in (1, 2, 3)
+                        ],
+                    }
+                    for week in (1, 2, 3, 4)
+                ],
+            },
+            ensure_ascii=False,
+        )
+        return types.SimpleNamespace(
+            choices=[types.SimpleNamespace(message=types.SimpleNamespace(content=content))],
+            usage=FakeUsage(),
+            id="groq-json-fallback",
+        )
+
+
+class StrictFailThenJsonObjectOpenAI:
+    last_instance = None
+
+    def __init__(self, **kwargs) -> None:
+        self.client_kwargs = kwargs
+        self.chat = types.SimpleNamespace(
+            completions=StrictFailThenJsonObjectCompletions()
+        )
+        StrictFailThenJsonObjectOpenAI.last_instance = self
+
+
 class GroqProviderTestCase(unittest.TestCase):
     def setUp(self) -> None:
         module = types.ModuleType("openai")
@@ -109,6 +166,29 @@ class GroqProviderTestCase(unittest.TestCase):
         schema = structured_call["response_format"]["json_schema"]["schema"]
         self.assertFalse(schema["additionalProperties"])
         self.assertEqual(set(schema["required"]), set(schema["properties"]))
+
+
+    def test_structured_output_retries_with_real_json_object_mode(self) -> None:
+        module = types.ModuleType("openai")
+        module.OpenAI = StrictFailThenJsonObjectOpenAI
+        with patch.dict(sys.modules, {"openai": module}):
+            provider = GroqAIMentorProvider(
+                api_key="gsk_test",
+                model="openai/gpt-oss-120b",
+                timeout_seconds=20,
+                max_retries=2,
+                max_output_tokens=3000,
+                reasoning_effort="medium",
+            )
+            result = provider.generate_plan({"student": {"id": 1}})
+
+        self.assertIsInstance(result.output, PlanGenerationOutput)
+        self.assertEqual(len(result.output.weeks), 4)
+        self.assertEqual(result.metadata.provider, "groq")
+        calls = StrictFailThenJsonObjectOpenAI.last_instance.chat.completions.calls
+        self.assertEqual(calls[0]["response_format"]["type"], "json_schema")
+        self.assertEqual(calls[1]["response_format"], {"type": "json_object"})
+        self.assertEqual(calls[1]["reasoning_effort"], "low")
 
     def test_invalid_reasoning_effort_is_rejected(self) -> None:
         with self.assertRaisesRegex(Exception, "GROQ_REASONING_EFFORT"):

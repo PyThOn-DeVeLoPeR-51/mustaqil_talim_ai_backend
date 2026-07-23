@@ -8,6 +8,7 @@ SDK o‘rnatmasdan mavjud ``openai`` paketidan foydalanadi, lekin Groq'ning
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any, TypeVar
 
 from pydantic import BaseModel, ValidationError
@@ -31,6 +32,7 @@ from app.llm.prompts import (
 OutputT = TypeVar("OutputT", bound=BaseModel)
 
 GROQ_OPENAI_BASE_URL = "https://api.groq.com/openai/v1"
+logger = logging.getLogger(__name__)
 
 
 def _strict_json_schema(model_type: type[BaseModel]) -> dict[str, Any]:
@@ -131,6 +133,83 @@ class GroqAIMentorProvider(AIMentorLLMProvider):
             ),
         )
 
+    def _json_object_response(
+        self,
+        *,
+        instructions: str,
+        context: dict[str, Any],
+        output_type: type[OutputT],
+        strict_error: Exception | None = None,
+    ) -> StructuredLLMResult[OutputT]:
+        """Strict Structured Outputs ishlamasa haqiqiy Groq bilan JSON rejimida qayta urinadi."""
+
+        schema_text = json.dumps(
+            output_type.model_json_schema(),
+            ensure_ascii=False,
+            default=str,
+        )
+        fallback_instructions = (
+            f"{instructions}\n\n"
+            "Javob faqat bitta JSON object bo‘lsin. Markdown, izoh yoki JSON tashqarisida "
+            "hech qanday matn yozmang. Quyidagi JSON Schema mazmuniga qat'iy amal qiling. "
+            "Ayniqsa haftalar va vazifalar sonini promptdagi talab bo‘yicha to‘liq bering.\n"
+            f"JSON_SCHEMA={schema_text}"
+        )
+
+        last_error: Exception | None = strict_error
+        for attempt in range(2):
+            try:
+                response = self._client.chat.completions.create(
+                    model=self.model_name,
+                    messages=[
+                        {"role": "system", "content": fallback_instructions},
+                        {
+                            "role": "user",
+                            "content": json.dumps(
+                                context,
+                                ensure_ascii=False,
+                                default=str,
+                            ),
+                        },
+                    ],
+                    response_format={"type": "json_object"},
+                    # Structured fallbackda tokenni javobning o‘ziga ko‘proq qoldiramiz.
+                    reasoning_effort="low",
+                    max_completion_tokens=self.max_output_tokens,
+                )
+                choices = getattr(response, "choices", None) or []
+                if not choices:
+                    raise ValueError("Groq JSON object javobi bo‘sh.")
+
+                content = str(
+                    getattr(choices[0].message, "content", "") or ""
+                ).strip()
+                if not content:
+                    raise ValueError("Groq JSON object javobi bo‘sh.")
+
+                parsed = output_type.model_validate_json(content)
+                return StructuredLLMResult(
+                    output=parsed,
+                    metadata=self._metadata(
+                        response,
+                        self.provider_name,
+                        self.model_name,
+                    ),
+                )
+            except Exception as exc:
+                last_error = exc
+                logger.warning(
+                    "Groq JSON object fallback attempt %s failed: %s: %s",
+                    attempt + 1,
+                    type(exc).__name__,
+                    exc,
+                )
+
+        raise LLMProviderError(
+            "provider_request_failed",
+            "Groq strukturalangan javobni yaratolmadi.",
+        ) from last_error
+
     def _structured_response(
         self,
         *,
@@ -166,17 +245,11 @@ class GroqAIMentorProvider(AIMentorLLMProvider):
             )
             choices = getattr(response, "choices", None) or []
             if not choices:
-                raise LLMProviderError(
-                    "empty_structured_output",
-                    "Groq strukturalangan javob qaytarmadi.",
-                )
+                raise ValueError("Groq strukturalangan javob qaytarmadi.")
 
             content = str(getattr(choices[0].message, "content", "") or "").strip()
             if not content:
-                raise LLMProviderError(
-                    "empty_structured_output",
-                    "Groq strukturalangan javob qaytarmadi.",
-                )
+                raise ValueError("Groq strukturalangan javob qaytarmadi.")
 
             parsed = output_type.model_validate_json(content)
             return StructuredLLMResult(
@@ -187,18 +260,21 @@ class GroqAIMentorProvider(AIMentorLLMProvider):
                     self.model_name,
                 ),
             )
-        except LLMProviderError:
-            raise
-        except ValidationError as exc:
-            raise LLMProviderError(
-                "invalid_structured_output",
-                "Groq javobi kutilgan JSON sxemasiga mos kelmadi.",
-            ) from exc
         except Exception as exc:
-            raise LLMProviderError(
-                "provider_request_failed",
-                "Groq xizmatiga so‘rov yuborishda xatolik yuz berdi.",
-            ) from exc
+            # Groq strict Structured Outputs ba'zan 400/json_validate_failed qaytarishi
+            # mumkin. Mock'ka tushishdan oldin haqiqiy Groq JSON Object Mode bilan
+            # qayta urinib ko‘ramiz.
+            logger.warning(
+                "Groq strict structured output failed; trying JSON object mode: %s: %s",
+                type(exc).__name__,
+                exc,
+            )
+            return self._json_object_response(
+                instructions=instructions,
+                context=context,
+                output_type=output_type,
+                strict_error=exc,
+            )
 
     def analyze_diagnostic(
         self,
