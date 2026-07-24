@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Generator
 from typing import Any, TypeVar
 
 from pydantic import BaseModel, ValidationError
@@ -170,3 +171,21 @@ class OpenAIAIMentorProvider(AIMentorLLMProvider):
                 "provider_request_failed",
                 "LLM xizmatiga so‘rov yuborishda xatolik yuz berdi.",
             ) from exc
+
+    def chat_reply_stream(
+        self,
+        context: dict[str, Any],
+    ) -> Generator[str, None, LLMCallMetadata]:
+        """OpenAI provider uchun mos streaming kontrakti.
+
+        Hozir productionda Groq haqiqiy token streaming beradi. OpenAI provider
+        esa mavjud barqaror Responses chaqiruvini ishlatib, natijani kichik
+        bo‘laklarda uzatadi. Bu provider protokolini to‘liq saqlaydi va kelajakda
+        Responses streamingga xavfsiz o‘tish imkonini beradi.
+        """
+
+        result = self.chat_reply(context)
+        text = result.text
+        for start in range(0, len(text), 48):
+            yield text[start : start + 48]
+        return result.metadata

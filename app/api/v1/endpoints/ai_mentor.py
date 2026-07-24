@@ -1,6 +1,7 @@
 """Talaba uchun AI Mentor diagnostika, reja va chat API endpointlari."""
 
 from fastapi import APIRouter, Depends, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.db.database import get_db
@@ -44,6 +45,7 @@ from app.services.ai_mentor_service import (
     get_student_plans,
     send_chat_message as send_chat_message_service,
     start_diagnostic_session,
+    stream_chat_message,
     submit_diagnostic_answers,
     update_chat_session,
     update_plan_item_progress,
@@ -335,4 +337,45 @@ def send_chat_message_endpoint(
         current_student,
         session_id,
         payload.content,
+    )
+
+
+@router.post(
+    "/chat/sessions/{session_id}/messages/stream",
+    status_code=status.HTTP_200_OK,
+    response_class=StreamingResponse,
+    responses={
+        200: {
+            "content": {
+                "text/event-stream": {
+                    "example": (
+                        "event: delta\n"
+                        'data: {"delta":"Salom"}\n\n'
+                    )
+                }
+            },
+            "description": "AI Mentor javobini Server-Sent Events orqali uzatadi.",
+        }
+    },
+)
+def stream_chat_message_endpoint(
+    session_id: int,
+    payload: AIMentorChatRequest,
+    db: Session = Depends(get_db),
+    current_student: Student = Depends(get_current_student),
+):
+    event_stream = stream_chat_message(
+        db,
+        current_student,
+        session_id,
+        payload.content,
+    )
+    return StreamingResponse(
+        event_stream,
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
     )

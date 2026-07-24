@@ -22,6 +22,30 @@ class FakeChatCompletions:
 
     def create(self, **kwargs):
         self.calls.append(kwargs)
+        if kwargs.get("stream"):
+            chunks = [
+                types.SimpleNamespace(
+                    choices=[
+                        types.SimpleNamespace(
+                            delta=types.SimpleNamespace(content="Birinchi ")
+                        )
+                    ],
+                    usage=None,
+                    id="groq-stream-1",
+                    model="openai/gpt-oss-120b",
+                ),
+                types.SimpleNamespace(
+                    choices=[
+                        types.SimpleNamespace(
+                            delta=types.SimpleNamespace(content="vazifani bajaring.")
+                        )
+                    ],
+                    usage=FakeUsage(),
+                    id="groq-stream-1",
+                    model="openai/gpt-oss-120b",
+                ),
+            ]
+            return iter(chunks)
         if kwargs.get("response_format"):
             content = json.dumps(
                 {
@@ -167,6 +191,34 @@ class GroqProviderTestCase(unittest.TestCase):
         self.assertFalse(schema["additionalProperties"])
         self.assertEqual(set(schema["required"]), set(schema["properties"]))
 
+
+    def test_streaming_chat_yields_deltas_and_metadata(self) -> None:
+        provider = GroqAIMentorProvider(
+            api_key="gsk_test",
+            model="openai/gpt-oss-120b",
+            timeout_seconds=20,
+            max_retries=2,
+            max_output_tokens=1200,
+            reasoning_effort="medium",
+        )
+
+        stream = provider.chat_reply_stream({"student_message": "Test"})
+        deltas = []
+        while True:
+            try:
+                deltas.append(next(stream))
+            except StopIteration as stop:
+                metadata = stop.value
+                break
+
+        self.assertEqual("".join(deltas), "Birinchi vazifani bajaring.")
+        self.assertEqual(metadata.provider, "groq")
+        self.assertEqual(metadata.model, "openai/gpt-oss-120b")
+        self.assertEqual(metadata.total_tokens, 80)
+        self.assertEqual(metadata.request_id, "groq-stream-1")
+        call = FakeOpenAI.last_instance.chat.completions.calls[-1]
+        self.assertTrue(call["stream"])
+        self.assertEqual(call["reasoning_effort"], "medium")
 
     def test_structured_output_retries_with_real_json_object_mode(self) -> None:
         module = types.ModuleType("openai")

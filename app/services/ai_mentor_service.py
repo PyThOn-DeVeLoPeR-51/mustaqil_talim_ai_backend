@@ -12,6 +12,7 @@ from app.services.ai_mentor_chat_service import (
     get_student_chat_sessions,
     send_chat_message,
     send_mock_chat_message,
+    stream_chat_message,
     update_chat_session,
 )
 from app.services.ai_mentor_diagnostic_service import (
@@ -58,6 +59,7 @@ __all__ = [
     "seed_diagnostic_questions",
     "send_chat_message",
     "send_mock_chat_message",
+    "stream_chat_message",
     "start_diagnostic_session",
     "submit_diagnostic_answers",
     "update_chat_session",

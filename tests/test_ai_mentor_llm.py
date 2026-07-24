@@ -37,6 +37,7 @@ from app.services.ai_mentor_service import (
     create_generated_plan,
     seed_diagnostic_questions,
     send_chat_message,
+    stream_chat_message,
     start_diagnostic_session,
     submit_diagnostic_answers,
 )
@@ -133,6 +134,17 @@ class FailingLLMProvider(FakeLLMProvider):
         del context
         raise LLMProviderError("provider_request_failed", "test failure")
 
+
+
+
+class FailingStreamingLLMProvider(FakeLLMProvider):
+    provider_name = "groq"
+    model_name = "openai/gpt-oss-120b"
+
+    def chat_reply_stream(self, context):
+        del context
+        yield "Boshlang‘ich partial javob"
+        raise LLMProviderError("provider_request_failed", "stream failure")
 
 class AIMentorLLMTestCase(unittest.TestCase):
     def setUp(self) -> None:
@@ -285,6 +297,45 @@ class AIMentorLLMTestCase(unittest.TestCase):
         self.assertEqual(
             response.assistant_message.metadata_json["provider"],
             "openai",
+        )
+
+    def test_streaming_chat_replaces_partial_with_mock_on_provider_failure(self) -> None:
+        settings.LLM_PROVIDER = "groq"
+        settings.LLM_FALLBACK_TO_MOCK = True
+        chat_session = create_chat_session(
+            self.db,
+            self.student,
+            AIMentorChatSessionCreate(),
+        )
+
+        with patch(
+            "app.services.ai_mentor_chat_service.get_ai_mentor_provider",
+            return_value=FailingStreamingLLMProvider(),
+        ):
+            events = list(
+                stream_chat_message(
+                    self.db,
+                    self.student,
+                    chat_session.id,
+                    "Vaqtni rejalashtirishga yordam bering",
+                )
+            )
+
+        stream_text = "".join(events)
+        self.assertIn("event: fallback", stream_text)
+        self.assertIn('"replace": true', stream_text)
+        self.assertIn("event: done", stream_text)
+
+        from app.services.ai_mentor_chat_service import build_chat_session_detail
+
+        detail = build_chat_session_detail(self.db, chat_session)
+        self.assertEqual(len(detail.messages), 2)
+        assistant = detail.messages[-1]
+        self.assertEqual(assistant.model_name, "mock-ai-mentor-v1")
+        self.assertEqual(assistant.metadata_json["provider"], "mock")
+        self.assertEqual(
+            assistant.metadata_json["fallback_from_provider"],
+            "groq",
         )
 
     def test_diagnostic_falls_back_to_mock(self) -> None:

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Generator
 from typing import Any, TypeVar
 
 from pydantic import BaseModel, ValidationError
@@ -344,4 +345,89 @@ class GroqAIMentorProvider(AIMentorLLMProvider):
             raise LLMProviderError(
                 "provider_request_failed",
                 "Groq xizmatiga so‘rov yuborishda xatolik yuz berdi.",
+            ) from exc
+
+    def chat_reply_stream(
+        self,
+        context: dict[str, Any],
+    ) -> Generator[str, None, LLMCallMetadata]:
+        """Groq chat javobini delta ko‘rinishida uzatadi.
+
+        Groq Chat Completions API ``stream=True`` bo‘lganda iterator qaytaradi.
+        Generatorning ``return`` qiymati yakuniy provider metadata bo‘lib, service
+        qatlamida assistant xabari bilan birga bazaga saqlanadi. Streaming
+        javobda usage kelmasa token maydonlari ``None`` bo‘lib qolishi mumkin;
+        provider/model/request_id baribir saqlanadi.
+        """
+
+        try:
+            stream = self._client.chat.completions.create(
+                model=self.model_name,
+                messages=[
+                    {"role": "system", "content": CHAT_SYSTEM_PROMPT},
+                    {
+                        "role": "user",
+                        "content": json.dumps(
+                            context,
+                            ensure_ascii=False,
+                            default=str,
+                        ),
+                    },
+                ],
+                reasoning_effort=self.reasoning_effort,
+                max_completion_tokens=self.max_output_tokens,
+                stream=True,
+            )
+
+            saw_content = False
+            request_id: str | None = None
+            response_model = self.model_name
+            input_tokens: int | None = None
+            output_tokens: int | None = None
+            total_tokens: int | None = None
+
+            for chunk in stream:
+                request_id = (
+                    getattr(chunk, "_request_id", None)
+                    or getattr(chunk, "id", None)
+                    or request_id
+                )
+                response_model = getattr(chunk, "model", None) or response_model
+
+                usage = getattr(chunk, "usage", None)
+                if usage is not None:
+                    input_tokens = getattr(usage, "prompt_tokens", None)
+                    output_tokens = getattr(usage, "completion_tokens", None)
+                    total_tokens = getattr(usage, "total_tokens", None)
+
+                choices = getattr(chunk, "choices", None) or []
+                if not choices:
+                    continue
+
+                delta = getattr(choices[0], "delta", None)
+                content = getattr(delta, "content", None) if delta is not None else None
+                if content:
+                    saw_content = True
+                    yield str(content)
+
+            if not saw_content:
+                raise LLMProviderError(
+                    "empty_text_output",
+                    "Groq streaming chat javobi bo‘sh qaytdi.",
+                )
+
+            return LLMCallMetadata(
+                provider=self.provider_name,
+                model=response_model,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                total_tokens=total_tokens,
+                request_id=request_id,
+            )
+        except LLMProviderError:
+            raise
+        except Exception as exc:
+            raise LLMProviderError(
+                "provider_request_failed",
+                "Groq streaming xizmatiga so‘rov yuborishda xatolik yuz berdi.",
             ) from exc

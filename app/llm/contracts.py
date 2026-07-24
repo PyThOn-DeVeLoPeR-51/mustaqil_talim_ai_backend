@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections.abc import Generator
 from typing import Any, Generic, Literal, Protocol, TypeVar
 
 from pydantic import BaseModel, Field, model_validator
@@ -119,3 +120,8 @@ class AIMentorLLMProvider(Protocol):
     ) -> StructuredLLMResult[PlanGenerationOutput]: ...
 
     def chat_reply(self, context: dict[str, Any]) -> TextLLMResult: ...
+
+    def chat_reply_stream(
+        self,
+        context: dict[str, Any],
+    ) -> Generator[str, None, LLMCallMetadata]: ...

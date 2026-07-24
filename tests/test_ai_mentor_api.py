@@ -69,6 +69,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.api.v1.endpoints.ai_mentor import router
+from app.core.config import settings
 from app.db.base import Base
 from app.db.database import get_db
 from app.models.student import Student
@@ -79,6 +80,11 @@ from app.services.auth_service import get_current_student
 
 class AIMentorAPITestCase(unittest.TestCase):
     def setUp(self) -> None:
+        self.original_llm_provider = settings.LLM_PROVIDER
+        self.original_llm_fallback = settings.LLM_FALLBACK_TO_MOCK
+        settings.LLM_PROVIDER = "mock"
+        settings.LLM_FALLBACK_TO_MOCK = True
+
         self.engine = create_engine(
             "sqlite+pysqlite:///:memory:",
             connect_args={"check_same_thread": False},
@@ -121,6 +127,8 @@ class AIMentorAPITestCase(unittest.TestCase):
         self.client = TestClient(app)
 
     def tearDown(self) -> None:
+        settings.LLM_PROVIDER = self.original_llm_provider
+        settings.LLM_FALLBACK_TO_MOCK = self.original_llm_fallback
         self.client.close()
         self.db.close()
         self.engine.dispose()
@@ -256,6 +264,31 @@ class AIMentorAPITestCase(unittest.TestCase):
         self.assertEqual(chat_detail_response.status_code, 200)
         self.assertEqual(len(chat_detail_response.json()["messages"]), 2)
 
+        streaming_response = self.client.post(
+            f"/ai-mentor/chat/sessions/{chat_session_id}/messages/stream",
+            json={"content": "Vaqtimni qanday rejalashtiraman?"},
+        )
+        self.assertEqual(streaming_response.status_code, 200)
+        self.assertTrue(
+            streaming_response.headers["content-type"].startswith(
+                "text/event-stream"
+            )
+        )
+        stream_text = streaming_response.text
+        self.assertIn("event: start", stream_text)
+        self.assertIn("event: delta", stream_text)
+        self.assertIn("event: done", stream_text)
+
+        streamed_chat_detail = self.client.get(
+            f"/ai-mentor/chat/sessions/{chat_session_id}"
+        )
+        self.assertEqual(streamed_chat_detail.status_code, 200)
+        self.assertEqual(len(streamed_chat_detail.json()["messages"]), 4)
+        self.assertEqual(
+            streamed_chat_detail.json()["messages"][-1]["metadata_json"]["stream"],
+            True,
+        )
+
         close_chat_response = self.client.patch(
             f"/ai-mentor/chat/sessions/{chat_session_id}",
             json={"status": "closed"},
@@ -268,6 +301,12 @@ class AIMentorAPITestCase(unittest.TestCase):
             json={"content": "Yana bir savol"},
         )
         self.assertEqual(rejected_message_response.status_code, 409)
+
+        rejected_stream_response = self.client.post(
+            f"/ai-mentor/chat/sessions/{chat_session_id}/messages/stream",
+            json={"content": "Yopilgan chatga streaming test"},
+        )
+        self.assertEqual(rejected_stream_response.status_code, 409)
 
         self.assertEqual(
             len(self.client.get("/ai-mentor/diagnostic/sessions").json()),

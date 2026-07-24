@@ -1,6 +1,8 @@
 """AI Mentor chat sessiyalari, xabarlar tarixi va LLM/mock javoblari."""
 
+import json
 import logging
+from collections.abc import Generator, Iterator
 from typing import Any
 
 from fastapi import status
@@ -8,7 +10,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.llm.contracts import LLMProviderError
+from app.llm.contracts import LLMCallMetadata, LLMProviderError
 from app.llm.factory import get_ai_mentor_provider
 from app.models.ai_mentor import (
     AIMentorChatMessage,
@@ -319,6 +321,375 @@ def _persist_chat_exchange(
         user_message=user_message,
         assistant_message=assistant_message,
     )
+
+
+def _sse_event(event: str, data: dict[str, Any]) -> str:
+    """Frontend uchun bitta Server-Sent Event yozuvini yaratadi."""
+
+    payload = json.dumps(data, ensure_ascii=False, default=str)
+    return f"event: {event}\ndata: {payload}\n\n"
+
+
+def _text_chunks(text: str, chunk_size: int = 48) -> Iterator[str]:
+    """Mock/non-streaming provider javobini kichik delta'larga ajratadi."""
+
+    if chunk_size < 1:
+        chunk_size = 48
+    for start in range(0, len(text), chunk_size):
+        yield text[start : start + chunk_size]
+
+
+def _persist_stream_user_message(
+    db: Session,
+    chat_session: AIMentorChatSession,
+    content: str,
+) -> AIMentorChatMessage:
+    """Streaming boshlanishidan oldin user xabarini bazaga mustahkam saqlaydi."""
+
+    user_message = _add_chat_message_without_commit(
+        db,
+        chat_session,
+        AIMentorChatMessageCreate(role="user", content=content),
+    )
+    db.commit()
+    db.refresh(chat_session)
+    db.refresh(user_message)
+    return user_message
+
+
+def _persist_stream_assistant_message(
+    db: Session,
+    chat_session: AIMentorChatSession,
+    *,
+    content: str,
+    model_name: str,
+    token_count: int | None,
+    metadata: dict[str, Any],
+) -> AIMentorChatMessage:
+    assistant_message = _add_chat_message_without_commit(
+        db,
+        chat_session,
+        AIMentorChatMessageCreate(
+            role="assistant",
+            content=content,
+            model_name=model_name,
+            token_count=token_count,
+            metadata_json=metadata,
+        ),
+    )
+    db.commit()
+    db.refresh(chat_session)
+    db.refresh(assistant_message)
+    return assistant_message
+
+
+def _consume_provider_stream(
+    provider: Any,
+    context: dict[str, Any],
+) -> Generator[str, None, LLMCallMetadata]:
+    """Provider streamingni yagona kontraktga keltiradi.
+
+    Groq haqiqiy delta streaming beradi. Eski yoki boshqa providerda streaming
+    metodi bo‘lmasa, uning to‘liq javobi kichik bo‘laklarga ajratiladi.
+    """
+
+    stream_method = getattr(provider, "chat_reply_stream", None)
+    if callable(stream_method):
+        stream = stream_method(context)
+        while True:
+            try:
+                delta = next(stream)
+            except StopIteration as stop:
+                metadata = stop.value
+                if isinstance(metadata, LLMCallMetadata):
+                    return metadata
+                return LLMCallMetadata(
+                    provider=getattr(provider, "provider_name", "unknown"),
+                    model=getattr(provider, "model_name", "unknown"),
+                )
+            if delta:
+                yield str(delta)
+
+    result = provider.chat_reply(context)
+    for delta in _text_chunks(result.text):
+        yield delta
+    return result.metadata
+
+
+def stream_chat_message(
+    db: Session,
+    student: Student,
+    session_id: int,
+    content: str,
+) -> Iterator[str]:
+    """Streamingni tayyorlaydi va HTTP status xatolarini headerlardan oldin beradi."""
+
+    chat_session = get_student_chat_session_or_404(db, student, session_id)
+    if chat_session.status != "active":
+        raise http_error(
+            status.HTTP_409_CONFLICT,
+            "Yopilgan yoki arxivlangan chatga xabar yuborib bo‘lmaydi.",
+        )
+
+    # User xabari history'ga ikki marta tushmasligi uchun context avval olinadi.
+    context = _llm_chat_context(db, student, chat_session, content)
+    user_message = _persist_stream_user_message(db, chat_session, content)
+    return _stream_chat_message_events(
+        db,
+        student,
+        chat_session,
+        content,
+        context,
+        user_message,
+    )
+
+
+def _stream_chat_message_events(
+    db: Session,
+    student: Student,
+    chat_session: AIMentorChatSession,
+    content: str,
+    context: dict[str, Any],
+    user_message: AIMentorChatMessage,
+) -> Iterator[str]:
+    """ChatGPT-uslubidagi SSE eventlarini yaratadi va yakunda DBga saqlaydi.
+
+    Event kontrakti:
+    - ``start``: user xabari saqlandi, provider haqida boshlang‘ich ma'lumot.
+    - ``delta``: assistant matnining navbatdagi bo‘lagi.
+    - ``fallback``: provider ishlamadi, mock javobga o‘tildi; ``replace=true``
+      bo‘lsa frontend avvalgi partial matnni tozalashi kerak.
+    - ``done``: to‘liq assistant xabari PostgreSQL'ga saqlandi.
+    - ``error``: fallback o‘chirilgan va stream yakunlanmadi.
+    """
+
+    configured_provider = settings.LLM_PROVIDER.strip().casefold()
+    assistant_parts: list[str] = []
+    assistant_persisted = False
+
+    def persist_partial(reason: str) -> None:
+        nonlocal assistant_persisted
+        partial = "".join(assistant_parts).strip()
+        if not partial or assistant_persisted:
+            return
+        _persist_stream_assistant_message(
+            db,
+            chat_session,
+            content=partial,
+            model_name=(
+                getattr(provider, "model_name", None)
+                if provider is not None
+                else "unknown"
+            )
+            or "unknown",
+            token_count=None,
+            metadata={
+                "provider": configured_provider,
+                "stream": True,
+                "stream_interrupted": True,
+                "interruption_reason": reason,
+            },
+        )
+        assistant_persisted = True
+
+    provider: Any | None = None
+    try:
+        if configured_provider != "mock":
+            provider = get_ai_mentor_provider()
+
+        yield _sse_event(
+            "start",
+            {
+                "session_id": chat_session.id,
+                "user_message": {
+                    "id": user_message.id,
+                    "session_id": user_message.session_id,
+                    "sequence_number": user_message.sequence_number,
+                    "role": user_message.role,
+                    "content": user_message.content,
+                    "created_at": user_message.created_at.isoformat(),
+                },
+                "provider": (
+                    getattr(provider, "provider_name", None)
+                    if provider is not None
+                    else "mock"
+                ),
+                "model": (
+                    getattr(provider, "model_name", None)
+                    if provider is not None
+                    else "mock-ai-mentor-v1"
+                ),
+            },
+        )
+
+        if configured_provider == "mock" or provider is None:
+            mock_text = _mock_chat_reply(db, student, content)
+            for delta in _text_chunks(mock_text):
+                assistant_parts.append(delta)
+                yield _sse_event("delta", {"delta": delta})
+            metadata = {"provider": "mock", "stream": True}
+            model_name = "mock-ai-mentor-v1"
+            token_count = None
+        else:
+            try:
+                stream = _consume_provider_stream(provider, context)
+                while True:
+                    try:
+                        delta = next(stream)
+                    except StopIteration as stop:
+                        llm_metadata = stop.value
+                        break
+                    assistant_parts.append(delta)
+                    yield _sse_event("delta", {"delta": delta})
+
+                if not assistant_parts:
+                    raise LLMProviderError(
+                        "empty_text_output",
+                        "AI Mentor streaming javobi bo‘sh qaytdi.",
+                    )
+
+                metadata = llm_metadata.as_dict()
+                metadata["stream"] = True
+                model_name = llm_metadata.model
+                token_count = llm_metadata.total_tokens
+            except LLMProviderError as exc:
+                logger.warning("Chat stream LLM fallback: %s", exc.code)
+                if not settings.LLM_FALLBACK_TO_MOCK:
+                    persist_partial(exc.code)
+                    yield _sse_event(
+                        "error",
+                        {
+                            "code": exc.code,
+                            "message": "AI Mentor LLM xizmati vaqtincha javob bera olmadi.",
+                            "partial_saved": bool(assistant_parts),
+                        },
+                    )
+                    return
+
+                # Partial LLM delta allaqachon ko‘ringan bo‘lsa frontend uni tozalab,
+                # mock matnni yangidan ko‘rsatishi kerak. DBga faqat yakuniy mock saqlanadi.
+                replace = bool(assistant_parts)
+                assistant_parts.clear()
+                yield _sse_event(
+                    "fallback",
+                    {
+                        "from_provider": configured_provider,
+                        "reason": exc.code,
+                        "replace": replace,
+                    },
+                )
+                mock_text = _mock_chat_reply(db, student, content)
+                for delta in _text_chunks(mock_text):
+                    assistant_parts.append(delta)
+                    yield _sse_event("delta", {"delta": delta})
+                metadata = {
+                    "provider": "mock",
+                    "stream": True,
+                    "fallback_from_provider": configured_provider,
+                    "fallback_reason": exc.code,
+                }
+                model_name = "mock-ai-mentor-v1"
+                token_count = None
+
+        assistant_content = "".join(assistant_parts).strip()
+        if not assistant_content:
+            yield _sse_event(
+                "error",
+                {
+                    "code": "empty_text_output",
+                    "message": "AI Mentor bo‘sh javob qaytardi.",
+                    "partial_saved": False,
+                },
+            )
+            return
+
+        assistant_message = _persist_stream_assistant_message(
+            db,
+            chat_session,
+            content=assistant_content,
+            model_name=model_name,
+            token_count=token_count,
+            metadata=metadata,
+        )
+        assistant_persisted = True
+
+        yield _sse_event(
+            "done",
+            {
+                "session_id": chat_session.id,
+                "assistant_message": {
+                    "id": assistant_message.id,
+                    "session_id": assistant_message.session_id,
+                    "sequence_number": assistant_message.sequence_number,
+                    "role": assistant_message.role,
+                    "content": assistant_message.content,
+                    "model_name": assistant_message.model_name,
+                    "token_count": assistant_message.token_count,
+                    "metadata_json": assistant_message.metadata_json,
+                    "created_at": assistant_message.created_at.isoformat(),
+                },
+            },
+        )
+    except GeneratorExit:
+        persist_partial("client_disconnected")
+        raise
+    except LLMProviderError as exc:
+        logger.warning("Chat stream provider initialization failed: %s", exc.code)
+        if settings.LLM_FALLBACK_TO_MOCK:
+            assistant_parts.clear()
+            yield _sse_event(
+                "fallback",
+                {
+                    "from_provider": configured_provider,
+                    "reason": exc.code,
+                    "replace": False,
+                },
+            )
+            mock_text = _mock_chat_reply(db, student, content)
+            for delta in _text_chunks(mock_text):
+                assistant_parts.append(delta)
+                yield _sse_event("delta", {"delta": delta})
+            assistant_message = _persist_stream_assistant_message(
+                db,
+                chat_session,
+                content="".join(assistant_parts).strip(),
+                model_name="mock-ai-mentor-v1",
+                token_count=None,
+                metadata={
+                    "provider": "mock",
+                    "stream": True,
+                    "fallback_from_provider": configured_provider,
+                    "fallback_reason": exc.code,
+                },
+            )
+            assistant_persisted = True
+            yield _sse_event(
+                "done",
+                {
+                    "session_id": chat_session.id,
+                    "assistant_message": {
+                        "id": assistant_message.id,
+                        "session_id": assistant_message.session_id,
+                        "sequence_number": assistant_message.sequence_number,
+                        "role": assistant_message.role,
+                        "content": assistant_message.content,
+                        "model_name": assistant_message.model_name,
+                        "token_count": assistant_message.token_count,
+                        "metadata_json": assistant_message.metadata_json,
+                        "created_at": assistant_message.created_at.isoformat(),
+                    },
+                },
+            )
+            return
+
+        yield _sse_event(
+            "error",
+            {
+                "code": exc.code,
+                "message": "AI Mentor LLM xizmati vaqtincha javob bera olmadi.",
+                "partial_saved": False,
+            },
+        )
 
 
 def send_mock_chat_message(
