@@ -17,9 +17,11 @@ __pycache__/
 app/uploads/submissions/*
 app/uploads/tasks/*
 app/uploads/results/*
+app/uploads/rag/*
 !app/uploads/submissions/.gitkeep
 !app/uploads/tasks/.gitkeep
 !app/uploads/results/.gitkeep
+!app/uploads/rag/.gitkeep
 
 # Local DB / OS / IDE
 *.sqlite3
