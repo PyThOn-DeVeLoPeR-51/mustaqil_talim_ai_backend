@@ -17,9 +17,11 @@ __pycache__/
 app/uploads/submissions/*
 app/uploads/tasks/*
 app/uploads/results/*
+app/uploads/rag/*
 !app/uploads/submissions/.gitkeep
 !app/uploads/tasks/.gitkeep
 !app/uploads/results/.gitkeep
+!app/uploads/rag/.gitkeep
 
 # Local DB / OS / IDE
 *.sqlite3
@@ -27,3 +29,5 @@ app/uploads/results/*
 .DS_Store
 .idea/
 .vscode/
+app/rag_storage/
+app/rag_models/

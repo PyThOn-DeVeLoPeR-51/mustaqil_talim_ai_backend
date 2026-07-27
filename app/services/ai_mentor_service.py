@@ -1,0 +1,67 @@
+"""AI Mentor servislarining yagona import nuqtasi.
+
+Routerlar barqaror va sodda importlardan foydalanishi uchun diagnostika, reja va
+chat servislarining ommaviy funksiyalari shu modul orqali qayta eksport qilinadi.
+"""
+
+from app.llm.factory import get_llm_provider_status
+from app.services.ai_mentor_chat_service import (
+    build_chat_session_detail,
+    create_chat_session,
+    get_student_chat_session_or_404,
+    get_student_chat_sessions,
+    send_chat_message,
+    send_mock_chat_message,
+    stream_chat_message,
+    update_chat_session,
+)
+from app.services.ai_mentor_diagnostic_service import (
+    build_diagnostic_session_detail,
+    get_active_diagnostic_questions,
+    get_latest_completed_diagnostic_session,
+    get_student_diagnostic_session_or_404,
+    get_student_diagnostic_sessions,
+    seed_diagnostic_questions,
+    start_diagnostic_session,
+    submit_diagnostic_answers,
+)
+from app.services.ai_mentor_plan_service import (
+    build_plan_detail_response,
+    calculate_plan_progress,
+    create_generated_plan,
+    create_mock_plan,
+    create_plan_from_payload,
+    get_active_or_latest_plan,
+    get_student_plan_or_404,
+    get_student_plans,
+    update_plan_item_progress,
+)
+
+__all__ = [
+    "build_chat_session_detail",
+    "build_diagnostic_session_detail",
+    "build_plan_detail_response",
+    "calculate_plan_progress",
+    "create_chat_session",
+    "create_generated_plan",
+    "create_mock_plan",
+    "create_plan_from_payload",
+    "get_active_diagnostic_questions",
+    "get_active_or_latest_plan",
+    "get_latest_completed_diagnostic_session",
+    "get_llm_provider_status",
+    "get_student_chat_session_or_404",
+    "get_student_chat_sessions",
+    "get_student_diagnostic_session_or_404",
+    "get_student_diagnostic_sessions",
+    "get_student_plan_or_404",
+    "get_student_plans",
+    "seed_diagnostic_questions",
+    "send_chat_message",
+    "send_mock_chat_message",
+    "stream_chat_message",
+    "start_diagnostic_session",
+    "submit_diagnostic_answers",
+    "update_chat_session",
+    "update_plan_item_progress",
+]
