@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 from collections.abc import Generator, Iterator
 from typing import Any
 
@@ -43,6 +44,62 @@ from app.services.rag_embedding_service import (
 
 
 logger = logging.getLogger(__name__)
+
+
+_RAG_EXCERPT_MAX_CHARS = 500
+_RAG_BOUNDARY_MIN_RATIO = 0.60
+
+
+def _truncate_rag_text(
+    value: str,
+    max_chars: int,
+    *,
+    add_ellipsis: bool = True,
+) -> str:
+    """Matnni gap/paragraf/so‘z chegarasida xavfsiz qisqartiradi."""
+
+    text = (value or "").strip()
+    if max_chars <= 0:
+        return ""
+    if len(text) <= max_chars:
+        return text
+
+    available_chars = max_chars - 1 if add_ellipsis and max_chars > 1 else max_chars
+    candidate = text[:available_chars].rstrip()
+    minimum_boundary = max(1, int(available_chars * _RAG_BOUNDARY_MIN_RATIO))
+
+    cut_at: int | None = None
+
+    paragraph_boundary = candidate.rfind("\n\n", minimum_boundary)
+    if paragraph_boundary >= minimum_boundary:
+        cut_at = paragraph_boundary
+
+    sentence_boundaries = [
+        match.end()
+        for match in re.finditer(r"[.!?…](?:[\"'”’)]*)", candidate)
+        if match.end() >= minimum_boundary
+    ]
+    if sentence_boundaries:
+        sentence_cut = sentence_boundaries[-1]
+        if cut_at is None or sentence_cut > cut_at:
+            cut_at = sentence_cut
+
+    if cut_at is None:
+        whitespace_boundary = max(
+            candidate.rfind(" ", minimum_boundary),
+            candidate.rfind("\n", minimum_boundary),
+            candidate.rfind("\t", minimum_boundary),
+        )
+        if whitespace_boundary >= minimum_boundary:
+            cut_at = whitespace_boundary
+
+    if cut_at is None:
+        cut_at = len(candidate)
+
+    truncated = candidate[:cut_at].rstrip()
+    if not add_ellipsis:
+        return truncated
+    return f"{truncated}…"
 
 
 def create_chat_session(
@@ -305,7 +362,11 @@ def _rag_chat_context(
         if not content_text:
             continue
         if len(content_text) > remaining_chars:
-            content_text = content_text[:remaining_chars].rstrip()
+            content_text = _truncate_rag_text(
+                content_text,
+                remaining_chars,
+                add_ellipsis=True,
+            )
         remaining_chars -= len(content_text)
 
         sources.append(
@@ -355,7 +416,11 @@ def _rag_metadata_from_context(
                 "page_number_start": source.get("page_number_start"),
                 "page_number_end": source.get("page_number_end"),
                 "score": source.get("score"),
-                "excerpt": str(source.get("content") or "")[:500],
+                "excerpt": _truncate_rag_text(
+                    str(source.get("content") or ""),
+                    _RAG_EXCERPT_MAX_CHARS,
+                    add_ellipsis=True,
+                ),
             }
         )
 
