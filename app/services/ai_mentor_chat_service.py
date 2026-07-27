@@ -36,6 +36,10 @@ from app.services.ai_mentor_plan_service import (
     get_active_or_latest_plan,
     get_student_plan_or_404,
 )
+from app.services.rag_embedding_service import (
+    semantic_search_student_documents,
+    student_has_searchable_embeddings,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -255,6 +259,116 @@ def _plan_context(
     }
 
 
+def _rag_chat_context(
+    db: Session,
+    student: Student,
+    content: str,
+) -> dict[str, Any]:
+    """Student savoli uchun o‘qituvchi materiallaridan xavfsiz RAG kontekst yaratadi.
+
+    RAG xatosi AI Mentor chatni yiqitmaydi. Embedding/model yoki pgvector vaqtincha
+    ishlamasa, chat oddiy LLM kontekstida davom etadi va metadata'da sabab saqlanadi.
+    """
+
+    if not settings.RAG_CHAT_ENABLED:
+        return {"enabled": False, "status": "disabled", "sources": []}
+    if settings.LLM_PROVIDER.strip().casefold() == "mock":
+        return {"enabled": True, "status": "llm_mock", "sources": []}
+
+    try:
+        if not student_has_searchable_embeddings(db, student):
+            return {"enabled": True, "status": "no_embedded_sources", "sources": []}
+
+        result = semantic_search_student_documents(
+            db,
+            student,
+            query=content,
+            top_k=settings.RAG_CHAT_TOP_K,
+            min_score=settings.RAG_CHAT_MIN_SCORE,
+        )
+    except Exception as exc:  # RAG chat uchun graceful degradation
+        logger.warning("AI Mentor RAG retrieval skipped: %s: %s", type(exc).__name__, exc)
+        return {
+            "enabled": True,
+            "status": "retrieval_failed",
+            "sources": [],
+            "error_type": type(exc).__name__,
+        }
+
+    sources: list[dict[str, Any]] = []
+    remaining_chars = max(int(settings.RAG_CHAT_MAX_CONTEXT_CHARS), 0)
+    for hit in result.hits:
+        if remaining_chars <= 0:
+            break
+
+        content_text = (hit.chunk.content or "").strip()
+        if not content_text:
+            continue
+        if len(content_text) > remaining_chars:
+            content_text = content_text[:remaining_chars].rstrip()
+        remaining_chars -= len(content_text)
+
+        sources.append(
+            {
+                "source_id": len(sources) + 1,
+                "document_id": hit.document.id,
+                "document_title": hit.document.title,
+                "original_filename": hit.document.original_filename,
+                "task_id": hit.document.task_id,
+                "chunk_id": hit.chunk.id,
+                "chunk_index": hit.chunk.chunk_index,
+                "section_title": hit.chunk.section_title,
+                "page_number_start": hit.chunk.page_number_start,
+                "page_number_end": hit.chunk.page_number_end,
+                "score": hit.score,
+                "content": content_text,
+            }
+        )
+
+    return {
+        "enabled": True,
+        "status": "ready" if sources else "no_relevant_sources",
+        "query": result.query,
+        "embedding_model": result.model,
+        "sources": sources,
+    }
+
+
+def _rag_metadata_from_context(
+    context: dict[str, Any],
+    *,
+    used_for_answer: bool,
+) -> dict[str, Any]:
+    knowledge_base = context.get("knowledge_base") or {}
+    metadata_sources: list[dict[str, Any]] = []
+    for source in knowledge_base.get("sources", []):
+        metadata_sources.append(
+            {
+                "source_id": source.get("source_id"),
+                "document_id": source.get("document_id"),
+                "document_title": source.get("document_title"),
+                "original_filename": source.get("original_filename"),
+                "task_id": source.get("task_id"),
+                "chunk_id": source.get("chunk_id"),
+                "chunk_index": source.get("chunk_index"),
+                "section_title": source.get("section_title"),
+                "page_number_start": source.get("page_number_start"),
+                "page_number_end": source.get("page_number_end"),
+                "score": source.get("score"),
+                "excerpt": str(source.get("content") or "")[:500],
+            }
+        )
+
+    return {
+        "enabled": bool(knowledge_base.get("enabled")),
+        "status": knowledge_base.get("status", "unknown"),
+        "used_for_answer": bool(used_for_answer and metadata_sources),
+        "source_count": len(metadata_sources),
+        "embedding_model": knowledge_base.get("embedding_model"),
+        "sources": metadata_sources,
+    }
+
+
 def _llm_chat_context(
     db: Session,
     student: Student,
@@ -280,6 +394,7 @@ def _llm_chat_context(
         "plan": _plan_context(db, student, chat_session),
         "chat_context": chat_session.context_json or {},
         "recent_messages": _chat_history_context(db, chat_session.id),
+        "knowledge_base": _rag_chat_context(db, student, content),
         "student_message": content,
     }
 
@@ -488,6 +603,7 @@ def _stream_chat_message_events(
                 "stream": True,
                 "stream_interrupted": True,
                 "interruption_reason": reason,
+                "rag": _rag_metadata_from_context(context, used_for_answer=True),
             },
         )
         assistant_persisted = True
@@ -519,6 +635,7 @@ def _stream_chat_message_events(
                     if provider is not None
                     else "mock-ai-mentor-v1"
                 ),
+                "rag": _rag_metadata_from_context(context, used_for_answer=False),
             },
         )
 
@@ -527,7 +644,11 @@ def _stream_chat_message_events(
             for delta in _text_chunks(mock_text):
                 assistant_parts.append(delta)
                 yield _sse_event("delta", {"delta": delta})
-            metadata = {"provider": "mock", "stream": True}
+            metadata = {
+                "provider": "mock",
+                "stream": True,
+                "rag": _rag_metadata_from_context(context, used_for_answer=False),
+            }
             model_name = "mock-ai-mentor-v1"
             token_count = None
         else:
@@ -550,6 +671,10 @@ def _stream_chat_message_events(
 
                 metadata = llm_metadata.as_dict()
                 metadata["stream"] = True
+                metadata["rag"] = _rag_metadata_from_context(
+                    context,
+                    used_for_answer=True,
+                )
                 model_name = llm_metadata.model
                 token_count = llm_metadata.total_tokens
             except LLMProviderError as exc:
@@ -587,6 +712,7 @@ def _stream_chat_message_events(
                     "stream": True,
                     "fallback_from_provider": configured_provider,
                     "fallback_reason": exc.code,
+                    "rag": _rag_metadata_from_context(context, used_for_answer=False),
                 }
                 model_name = "mock-ai-mentor-v1"
                 token_count = None
@@ -660,6 +786,7 @@ def _stream_chat_message_events(
                     "stream": True,
                     "fallback_from_provider": configured_provider,
                     "fallback_reason": exc.code,
+                    "rag": _rag_metadata_from_context(context, used_for_answer=False),
                 },
             )
             assistant_persisted = True
@@ -735,17 +862,21 @@ def send_chat_message(
     if settings.LLM_PROVIDER.strip().casefold() == "mock":
         return send_mock_chat_message(db, student, session_id, content)
 
+    context: dict[str, Any] | None = None
     try:
         provider = get_ai_mentor_provider()
         if provider is None:
             return send_mock_chat_message(db, student, session_id, content)
-        result = provider.chat_reply(
-            _llm_chat_context(db, student, chat_session, content)
-        )
+        context = _llm_chat_context(db, student, chat_session, content)
+        result = provider.chat_reply(context)
         assistant_content = result.text
         model_name = result.metadata.model
         token_count = result.metadata.total_tokens
         metadata = result.metadata.as_dict()
+        metadata["rag"] = _rag_metadata_from_context(
+            context,
+            used_for_answer=True,
+        )
     except LLMProviderError as exc:
         logger.warning("Chat LLM fallback: %s", exc.code)
         if not settings.LLM_FALLBACK_TO_MOCK:
@@ -760,6 +891,10 @@ def send_chat_message(
             "provider": "mock",
             "fallback_from_provider": settings.LLM_PROVIDER,
             "fallback_reason": exc.code,
+            "rag": _rag_metadata_from_context(
+                context or {},
+                used_for_answer=False,
+            ),
         }
 
     return _persist_chat_exchange(

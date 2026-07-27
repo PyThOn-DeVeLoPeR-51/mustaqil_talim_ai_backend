@@ -29,3 +29,5 @@ app/uploads/rag/*
 .DS_Store
 .idea/
 .vscode/
+app/rag_storage/
+app/rag_models/

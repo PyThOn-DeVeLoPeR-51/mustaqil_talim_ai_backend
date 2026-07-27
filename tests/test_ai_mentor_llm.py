@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import unittest
+from types import SimpleNamespace
 from datetime import date
 from unittest.mock import patch
 
@@ -129,6 +130,15 @@ class FakeLLMProvider:
         )
 
 
+class CapturingLLMProvider(FakeLLMProvider):
+    def __init__(self) -> None:
+        self.last_chat_context = None
+
+    def chat_reply(self, context):
+        self.last_chat_context = context
+        return super().chat_reply(context)
+
+
 class FailingLLMProvider(FakeLLMProvider):
     def analyze_diagnostic(self, context):
         del context
@@ -150,8 +160,10 @@ class AIMentorLLMTestCase(unittest.TestCase):
     def setUp(self) -> None:
         self.original_provider = settings.LLM_PROVIDER
         self.original_fallback = settings.LLM_FALLBACK_TO_MOCK
+        self.original_rag_chat_enabled = settings.RAG_CHAT_ENABLED
         settings.LLM_PROVIDER = "openai"
         settings.LLM_FALLBACK_TO_MOCK = False
+        settings.RAG_CHAT_ENABLED = True
 
         self.engine = create_engine(
             "sqlite+pysqlite:///:memory:",
@@ -185,6 +197,7 @@ class AIMentorLLMTestCase(unittest.TestCase):
     def tearDown(self) -> None:
         settings.LLM_PROVIDER = self.original_provider
         settings.LLM_FALLBACK_TO_MOCK = self.original_fallback
+        settings.RAG_CHAT_ENABLED = self.original_rag_chat_enabled
         self.db.close()
         self.engine.dispose()
 
@@ -298,6 +311,77 @@ class AIMentorLLMTestCase(unittest.TestCase):
             response.assistant_message.metadata_json["provider"],
             "openai",
         )
+
+    def test_chat_includes_rag_context_and_persists_source_metadata(self) -> None:
+        provider = CapturingLLMProvider()
+        chat_session = create_chat_session(
+            self.db,
+            self.student,
+            AIMentorChatSessionCreate(),
+        )
+
+        fake_search = SimpleNamespace(
+            query="Kredit-modul tizimida mustaqil ta'limning ahamiyati nimada?",
+            model="intfloat/multilingual-e5-small",
+            hits=[
+                SimpleNamespace(
+                    score=0.8421,
+                    document=SimpleNamespace(
+                        id=7,
+                        title="Kredit-modul bo‘yicha ma'ruza",
+                        original_filename="lecture.docx",
+                        task_id=None,
+                    ),
+                    chunk=SimpleNamespace(
+                        id=71,
+                        chunk_index=3,
+                        section_title="Mustaqil ta'lim",
+                        page_number_start=None,
+                        page_number_end=None,
+                        content=(
+                            "Kredit-modul tizimida mustaqil ta'lim talabaning "
+                            "individual o‘quv yuklamasini rejalashtirishga xizmat qiladi."
+                        ),
+                    ),
+                )
+            ],
+        )
+
+        with (
+            patch(
+                "app.services.ai_mentor_chat_service.student_has_searchable_embeddings",
+                return_value=True,
+            ),
+            patch(
+                "app.services.ai_mentor_chat_service.semantic_search_student_documents",
+                return_value=fake_search,
+            ),
+            patch(
+                "app.services.ai_mentor_chat_service.get_ai_mentor_provider",
+                return_value=provider,
+            ),
+        ):
+            response = send_chat_message(
+                self.db,
+                self.student,
+                chat_session.id,
+                "Mustaqil ta'limning o‘rni qanday?",
+            )
+
+        self.assertIsNotNone(provider.last_chat_context)
+        kb = provider.last_chat_context["knowledge_base"]
+        self.assertEqual(kb["status"], "ready")
+        self.assertEqual(len(kb["sources"]), 1)
+        self.assertEqual(kb["sources"][0]["source_id"], 1)
+        self.assertIn("Kredit-modul", kb["sources"][0]["content"] )
+
+        rag_metadata = response.assistant_message.metadata_json["rag"]
+        self.assertTrue(rag_metadata["used_for_answer"])
+        self.assertEqual(rag_metadata["source_count"], 1)
+        self.assertEqual(rag_metadata["sources"][0]["document_id"], 7)
+        self.assertEqual(rag_metadata["sources"][0]["chunk_id"], 71)
+        self.assertNotIn("content", rag_metadata["sources"][0])
+        self.assertIn("excerpt", rag_metadata["sources"][0])
 
     def test_streaming_chat_replaces_partial_with_mock_on_provider_failure(self) -> None:
         settings.LLM_PROVIDER = "groq"
