@@ -7,6 +7,7 @@ from app.schemas.rag import (
     RAGChunkRead,
     RAGDocumentEmbeddingResult,
     RAGDocumentRead,
+    RAGDocumentUpdate,
     RAGEmbeddingStatusRead,
     RAGSemanticSearchRequest,
     RAGSemanticSearchResponse,
@@ -25,6 +26,7 @@ from app.services.rag_service import (
     get_teacher_document_or_404,
     get_teacher_documents,
     reprocess_teacher_document,
+    update_teacher_document,
 )
 
 
@@ -84,6 +86,30 @@ def get_rag_document(
     current_teacher: Teacher = Depends(get_current_teacher),
 ):
     return get_teacher_document_or_404(db, current_teacher, document_id)
+
+
+@router.patch("/documents/{document_id}", response_model=RAGDocumentRead)
+def update_rag_document(
+    document_id: int,
+    payload: RAGDocumentUpdate,
+    db: Session = Depends(get_db),
+    current_teacher: Teacher = Depends(get_current_teacher),
+):
+    fields = payload.model_fields_set
+    if not fields:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Yangilash uchun kamida bitta maydon yuboring.",
+        )
+    return update_teacher_document(
+        db,
+        current_teacher,
+        document_id,
+        title=payload.title,
+        task_id=payload.task_id,
+        update_title="title" in fields,
+        update_task_id="task_id" in fields,
+    )
 
 
 @router.get(

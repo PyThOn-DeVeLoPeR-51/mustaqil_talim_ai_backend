@@ -187,12 +187,25 @@ class RAGAPITestCase(unittest.TestCase):
         document = response.json()
         self.assertEqual(document["status"], "ready")
         self.assertGreater(document["chunk_count"], 0)
+        self.assertEqual(document["embedding_status"], "not_started")
+        self.assertEqual(document["embedded_chunk_count"], 0)
         self.assertNotIn("stored_file_path", document)
         document_id = document["id"]
 
         list_response = self.client.get("/rag/documents")
         self.assertEqual(list_response.status_code, 200)
         self.assertEqual(len(list_response.json()), 1)
+
+        patch_response = self.client.patch(
+            f"/rag/documents/{document_id}",
+            json={"title": "Yangilangan muhandislik grafikasi", "task_id": None},
+        )
+        self.assertEqual(patch_response.status_code, 200, patch_response.text)
+        self.assertEqual(patch_response.json()["title"], "Yangilangan muhandislik grafikasi")
+        self.assertIsNone(patch_response.json()["task_id"])
+
+        empty_patch = self.client.patch(f"/rag/documents/{document_id}", json={})
+        self.assertEqual(empty_patch.status_code, 422)
 
         chunks_response = self.client.get(f"/rag/documents/{document_id}/chunks")
         self.assertEqual(chunks_response.status_code, 200)

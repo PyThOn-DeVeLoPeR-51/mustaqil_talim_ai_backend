@@ -87,6 +87,11 @@ class RAGEmbeddingServiceTestCase(unittest.TestCase):
         )
         self.assertEqual(result.embedded_chunk_count, 2)
         self.assertEqual(result.dimensions, 4)
+        self.db.refresh(self.document)
+        self.assertEqual(self.document.embedding_status, "ready")
+        self.assertEqual(self.document.embedded_chunk_count, 2)
+        self.assertEqual(self.document.embedding_model, "fake-multilingual")
+        self.assertEqual(self.document.embedding_dimensions, 4)
 
         chunks = (
             self.db.query(RAGChunk)
