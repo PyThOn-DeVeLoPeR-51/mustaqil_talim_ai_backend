@@ -81,6 +81,40 @@ class RAGDocument(Base):
         nullable=True,
     )
 
+    @property
+    def embedded_chunk_count(self) -> int:
+        metadata = self.metadata_json or {}
+        value = metadata.get("embedded_chunk_count", 0)
+        try:
+            count = int(value or 0)
+        except (TypeError, ValueError):
+            return 0
+        return max(0, min(count, self.chunk_count or 0))
+
+    @property
+    def embedding_status(self) -> str:
+        if self.status != "ready" or not self.chunk_count:
+            return "not_started"
+        embedded = self.embedded_chunk_count
+        if embedded <= 0:
+            return "not_started"
+        if embedded >= self.chunk_count:
+            return "ready"
+        return "partial"
+
+    @property
+    def embedding_model(self) -> str | None:
+        value = (self.metadata_json or {}).get("embedding_model")
+        return str(value) if value else None
+
+    @property
+    def embedding_dimensions(self) -> int | None:
+        value = (self.metadata_json or {}).get("embedding_dimensions")
+        try:
+            return int(value) if value is not None else None
+        except (TypeError, ValueError):
+            return None
+
     __table_args__ = (
         CheckConstraint(
             "file_type IN ('pdf', 'docx')",

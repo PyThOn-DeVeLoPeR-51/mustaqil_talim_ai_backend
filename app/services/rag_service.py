@@ -333,6 +333,52 @@ def reprocess_teacher_document(
     return process_rag_document(db, document)
 
 
+def update_teacher_document(
+    db: Session,
+    teacher: Teacher,
+    document_id: int,
+    *,
+    title: str | None = None,
+    task_id: int | None = None,
+    update_title: bool = False,
+    update_task_id: bool = False,
+) -> RAGDocument:
+    document = get_teacher_document_or_404(db, teacher, document_id)
+
+    if update_title:
+        clean_title = (title or "").strip()
+        if len(clean_title) < 3 or len(clean_title) > 255:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="title 3–255 belgi oralig‘ida bo‘lishi kerak.",
+            )
+        document.title = clean_title
+
+    if update_task_id:
+        _validate_task_ownership(db, teacher, task_id)
+        duplicate = (
+            db.query(RAGDocument)
+            .filter(
+                RAGDocument.id != document.id,
+                RAGDocument.teacher_id == teacher.id,
+                RAGDocument.task_id == task_id,
+                RAGDocument.checksum_sha256 == document.checksum_sha256,
+                RAGDocument.status != "archived",
+            )
+            .first()
+        )
+        if duplicate is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Bu fayl tanlangan topshiriq uchun avval yuklangan (document_id={duplicate.id}).",
+            )
+        document.task_id = task_id
+
+    db.commit()
+    db.refresh(document)
+    return document
+
+
 def get_teacher_documents(
     db: Session,
     teacher: Teacher,

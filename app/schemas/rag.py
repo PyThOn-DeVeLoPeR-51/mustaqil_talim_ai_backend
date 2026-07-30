@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 RAGDocumentStatus = Literal["uploaded", "processing", "ready", "failed", "archived"]
 RAGFileType = Literal["pdf", "docx"]
+RAGEmbeddingStatus = Literal["not_started", "partial", "ready"]
 
 
 class RAGDocumentRead(BaseModel):
@@ -21,6 +22,10 @@ class RAGDocumentRead(BaseModel):
     status: RAGDocumentStatus
     page_count: int | None = None
     chunk_count: int
+    embedded_chunk_count: int = 0
+    embedding_status: RAGEmbeddingStatus = "not_started"
+    embedding_model: str | None = None
+    embedding_dimensions: int | None = None
     processing_error: str | None = None
     metadata_json: dict[str, Any] | None = None
     created_at: datetime
@@ -28,6 +33,20 @@ class RAGDocumentRead(BaseModel):
     processed_at: datetime | None = None
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class RAGDocumentUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=3, max_length=255)
+    task_id: int | None = Field(default=None, ge=1)
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "title": "Muhandislik grafikasi — 2-ma’ruza",
+                "task_id": None,
+            }
+        }
+    )
 
 
 class RAGChunkRead(BaseModel):
