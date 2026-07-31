@@ -237,3 +237,70 @@ class RAGChunk(Base):
             name="ck_rag_chunk_embedding_dimensions",
         ),
     )
+
+
+class RAGProcessingJob(Base):
+    """RAG ingestion/embedding ishlarini DB-backed queue orqali boshqaradi."""
+
+    __tablename__ = "rag_processing_jobs"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    document_id: Mapped[int] = mapped_column(
+        ForeignKey("rag_documents.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    teacher_id: Mapped[int] = mapped_column(
+        ForeignKey("teachers.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    # ingest | reprocess | embed
+    job_type: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
+    # pending | running | succeeded | failed | cancelled
+    status: Mapped[str] = mapped_column(
+        String(30), default="pending", nullable=False, index=True
+    )
+    progress_percent: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
+
+    payload_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    result_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    available_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
+    )
+    locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    locked_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "job_type IN ('ingest', 'reprocess', 'embed')",
+            name="ck_rag_processing_job_type",
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'running', 'succeeded', 'failed', 'cancelled')",
+            name="ck_rag_processing_job_status",
+        ),
+        CheckConstraint(
+            "progress_percent >= 0 AND progress_percent <= 100",
+            name="ck_rag_processing_job_progress",
+        ),
+        CheckConstraint("attempts >= 0", name="ck_rag_processing_job_attempts"),
+        CheckConstraint("max_attempts >= 1", name="ck_rag_processing_job_max_attempts"),
+    )
