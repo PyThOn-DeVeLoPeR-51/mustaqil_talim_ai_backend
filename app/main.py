@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -6,11 +7,31 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api.v1.api import api_router
 from app.core.config import settings
+from app.core.logging import configure_logging
+from app.rag.worker import RAGBackgroundWorker
+
+
+configure_logging()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    worker: RAGBackgroundWorker | None = None
+    if settings.RAG_BACKGROUND_WORKER_ENABLED:
+        worker = RAGBackgroundWorker()
+        await worker.start()
+        app.state.rag_worker = worker
+    try:
+        yield
+    finally:
+        if worker is not None:
+            await worker.stop()
 
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
-    version="1.0.0",
+    version="1.1.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -18,7 +39,6 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:3000",
         "http://127.0.0.1:3000",
-        "http://localhost:3000",
         "http://192.168.1.107:3000",
         "https://mustaqil-talim-ai-frontend.vercel.app",
     ],

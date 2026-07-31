@@ -127,3 +127,56 @@ class RAGSemanticSearchResponse(BaseModel):
     dimensions: int
     top_k: int
     hits: list[RAGSemanticSearchHit] = Field(default_factory=list)
+
+
+RAGJobType = Literal["ingest", "reprocess", "embed"]
+RAGJobStatus = Literal["pending", "running", "succeeded", "failed", "cancelled"]
+
+
+class RAGProcessingJobRead(BaseModel):
+    id: int
+    document_id: int
+    teacher_id: int
+    job_type: RAGJobType
+    status: RAGJobStatus
+    progress_percent: int
+    attempts: int
+    max_attempts: int
+    payload_json: dict[str, Any] | None = None
+    result_json: dict[str, Any] | None = None
+    error_message: str | None = None
+    available_at: datetime
+    locked_at: datetime | None = None
+    locked_by: str | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RAGDocumentJobResponse(BaseModel):
+    document: RAGDocumentRead
+    job: RAGProcessingJobRead
+
+
+class RAGStorageUsageRead(BaseModel):
+    teacher_id: int
+    document_count: int
+    document_limit: int | None = None
+    used_bytes: int
+    limit_bytes: int | None = None
+    remaining_bytes: int | None = None
+    usage_percent: float | None = None
+
+
+class RAGMonitoringSummaryRead(BaseModel):
+    documents_total: int
+    documents_by_status: dict[str, int]
+    embedding_by_status: dict[str, int]
+    jobs_total: int
+    jobs_by_status: dict[str, int]
+    storage: RAGStorageUsageRead
+    worker_enabled: bool
+    worker_poll_seconds: float

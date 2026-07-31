@@ -14,4 +14,4 @@ from app.models.ai_mentor import (  # noqa
     AIMentorPlanWeek,
 )
 
-from app.models.rag import RAGChunk, RAGDocument  # noqa
+from app.models.rag import RAGChunk, RAGDocument, RAGProcessingJob  # noqa
