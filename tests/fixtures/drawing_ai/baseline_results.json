@@ -1,0 +1,537 @@
+[
+  {
+    "mode": "etalon",
+    "name": "identical.png",
+    "score": 69.0,
+    "table": [
+      {
+        "criterion": "Ramka + burchak shtampi",
+        "score": 3.0,
+        "max_score": 3.0,
+        "percent": 100.0
+      },
+      {
+        "criterion": "Chizmani to'g'ri joylashtirish",
+        "score": 6.0,
+        "max_score": 6.0,
+        "percent": 100.0
+      },
+      {
+        "criterion": "Chiziq turlari",
+        "score": 8.0,
+        "max_score": 8.0,
+        "percent": 100.0
+      },
+      {
+        "criterion": "O'lcham qo'yish",
+        "score": 12.0,
+        "max_score": 12.0,
+        "percent": 100.0
+      },
+      {
+        "criterion": "Proyeksiyalar soni",
+        "score": 12.0,
+        "max_score": 18.0,
+        "percent": 66.67
+      },
+      {
+        "criterion": "Proyeksiyalarda qirqim bajarilganligi",
+        "score": 0.0,
+        "max_score": 10.0,
+        "percent": 0.0
+      },
+      {
+        "criterion": "Yaqqol tasvir to'g'riligi",
+        "score": 24.0,
+        "max_score": 24.0,
+        "percent": 100.0
+      },
+      {
+        "criterion": "Yaqqol tasvirda qirqim bajarilganligi",
+        "score": 0.0,
+        "max_score": 15.0,
+        "percent": 0.0
+      },
+      {
+        "criterion": "Chizma tozaligi",
+        "score": 4.0,
+        "max_score": 4.0,
+        "percent": 100.0
+      }
+    ],
+    "elapsed": 0.7055066349998924
+  },
+  {
+    "mode": "etalon",
+    "name": "shifted.png",
+    "score": 55.33,
+    "table": [
+      {
+        "criterion": "Ramka + burchak shtampi",
+        "score": 0.0,
+        "max_score": 3.0,
+        "percent": 0.0
+      },
+      {
+        "criterion": "Chizmani to'g'ri joylashtirish",
+        "score": 5.0,
+        "max_score": 6.0,
+        "percent": 83.33
+      },
+      {
+        "criterion": "Chiziq turlari",
+        "score": 8.0,
+        "max_score": 8.0,
+        "percent": 100.0
+      },
+      {
+        "criterion": "O'lcham qo'yish",
+        "score": 12.0,
+        "max_score": 12.0,
+        "percent": 100.0
+      },
+      {
+        "criterion": "Proyeksiyalar soni",
+        "score": 12.0,
+        "max_score": 18.0,
+        "percent": 66.67
+      },
+      {
+        "criterion": "Proyeksiyalarda qirqim bajarilganligi",
+        "score": 3.33,
+        "max_score": 10.0,
+        "percent": 33.3
+      },
+      {
+        "criterion": "Yaqqol tasvir to'g'riligi",
+        "score": 12.0,
+        "max_score": 24.0,
+        "percent": 50.0
+      },
+      {
+        "criterion": "Yaqqol tasvirda qirqim bajarilganligi",
+        "score": 0.0,
+        "max_score": 15.0,
+        "percent": 0.0
+      },
+      {
+        "criterion": "Chizma tozaligi",
+        "score": 3.0,
+        "max_score": 4.0,
+        "percent": 75.0
+      }
+    ],
+    "elapsed": 0.5669743450000624
+  },
+  {
+    "mode": "etalon",
+    "name": "missing_views.png",
+    "score": 32.33,
+    "table": [
+      {
+        "criterion": "Ramka + burchak shtampi",
+        "score": 2.0,
+        "max_score": 3.0,
+        "percent": 66.67
+      },
+      {
+        "criterion": "Chizmani to'g'ri joylashtirish",
+        "score": 6.0,
+        "max_score": 6.0,
+        "percent": 100.0
+      },
+      {
+        "criterion": "Chiziq turlari",
+        "score": 8.0,
+        "max_score": 8.0,
+        "percent": 100.0
+      },
+      {
+        "criterion": "O'lcham qo'yish",
+        "score": 3.0,
+        "max_score": 12.0,
+        "percent": 25.0
+      },
+      {
+        "criterion": "Proyeksiyalar soni",
+        "score": 6.0,
+        "max_score": 18.0,
+        "percent": 33.33
+      },
+      {
+        "criterion": "Proyeksiyalarda qirqim bajarilganligi",
+        "score": 3.33,
+        "max_score": 10.0,
+        "percent": 33.3
+      },
+      {
+        "criterion": "Yaqqol tasvir to'g'riligi",
+        "score": 0.0,
+        "max_score": 24.0,
+        "percent": 0.0
+      },
+      {
+        "criterion": "Yaqqol tasvirda qirqim bajarilganligi",
+        "score": 0.0,
+        "max_score": 15.0,
+        "percent": 0.0
+      },
+      {
+        "criterion": "Chizma tozaligi",
+        "score": 4.0,
+        "max_score": 4.0,
+        "percent": 100.0
+      }
+    ],
+    "elapsed": 0.6086118460000307
+  },
+  {
+    "mode": "etalon",
+    "name": "noisy.png",
+    "score": 70.33,
+    "table": [
+      {
+        "criterion": "Ramka + burchak shtampi",
+        "score": 3.0,
+        "max_score": 3.0,
+        "percent": 100.0
+      },
+      {
+        "criterion": "Chizmani to'g'ri joylashtirish",
+        "score": 6.0,
+        "max_score": 6.0,
+        "percent": 100.0
+      },
+      {
+        "criterion": "Chiziq turlari",
+        "score": 8.0,
+        "max_score": 8.0,
+        "percent": 100.0
+      },
+      {
+        "criterion": "O'lcham qo'yish",
+        "score": 12.0,
+        "max_score": 12.0,
+        "percent": 100.0
+      },
+      {
+        "criterion": "Proyeksiyalar soni",
+        "score": 12.0,
+        "max_score": 18.0,
+        "percent": 66.67
+      },
+      {
+        "criterion": "Proyeksiyalarda qirqim bajarilganligi",
+        "score": 3.33,
+        "max_score": 10.0,
+        "percent": 33.3
+      },
+      {
+        "criterion": "Yaqqol tasvir to'g'riligi",
+        "score": 24.0,
+        "max_score": 24.0,
+        "percent": 100.0
+      },
+      {
+        "criterion": "Yaqqol tasvirda qirqim bajarilganligi",
+        "score": 0.0,
+        "max_score": 15.0,
+        "percent": 0.0
+      },
+      {
+        "criterion": "Chizma tozaligi",
+        "score": 2.0,
+        "max_score": 4.0,
+        "percent": 50.0
+      }
+    ],
+    "elapsed": 0.863908586999969
+  },
+  {
+    "mode": "etalon",
+    "name": "blank_frame.png",
+    "score": 18.0,
+    "table": [
+      {
+        "criterion": "Ramka + burchak shtampi",
+        "score": 0.0,
+        "max_score": 3.0,
+        "percent": 0.0
+      },
+      {
+        "criterion": "Chizmani to'g'ri joylashtirish",
+        "score": 6.0,
+        "max_score": 6.0,
+        "percent": 100.0
+      },
+      {
+        "criterion": "Chiziq turlari",
+        "score": 8.0,
+        "max_score": 8.0,
+        "percent": 100.0
+      },
+      {
+        "criterion": "O'lcham qo'yish",
+        "score": 0.0,
+        "max_score": 12.0,
+        "percent": 0.0
+      },
+      {
+        "criterion": "Proyeksiyalar soni",
+        "score": 0.0,
+        "max_score": 18.0,
+        "percent": 0.0
+      },
+      {
+        "criterion": "Proyeksiyalarda qirqim bajarilganligi",
+        "score": 0.0,
+        "max_score": 10.0,
+        "percent": 0.0
+      },
+      {
+        "criterion": "Yaqqol tasvir to'g'riligi",
+        "score": 0.0,
+        "max_score": 24.0,
+        "percent": 0.0
+      },
+      {
+        "criterion": "Yaqqol tasvirda qirqim bajarilganligi",
+        "score": 0.0,
+        "max_score": 15.0,
+        "percent": 0.0
+      },
+      {
+        "criterion": "Chizma tozaligi",
+        "score": 4.0,
+        "max_score": 4.0,
+        "percent": 100.0
+      }
+    ],
+    "elapsed": 0.5316344160000881
+  },
+  {
+    "mode": "optional",
+    "name": "identical.png",
+    "score": 88,
+    "table": [
+      {
+        "criterion": "Proyeksiyalar to‘liqligi va joylashuvi",
+        "score": 15.0,
+        "max_score": 15.0,
+        "comment": ""
+      },
+      {
+        "criterion": "Qirqim va shtrixovka sifati",
+        "score": 10.0,
+        "max_score": 10.0,
+        "comment": ""
+      },
+      {
+        "criterion": "O‘lchamlar mavjudligi va joylashuvi",
+        "score": 7.0,
+        "max_score": 15.0,
+        "comment": "O‘lchamlar faqat bitta ko‘rinishda aniq ko‘rindi"
+      },
+      {
+        "criterion": "Chiziq semantikasi va chizmachilik qoidalari",
+        "score": 15.0,
+        "max_score": 15.0,
+        "comment": ""
+      },
+      {
+        "criterion": "Chizma tozaligi va o‘qilishi",
+        "score": 10.0,
+        "max_score": 10.0,
+        "comment": ""
+      },
+      {
+        "criterion": "Topshiriq talabiga moslik",
+        "score": 9.0,
+        "max_score": 10.0,
+        "comment": "O‘lcham evidence bor, lekin faqat bitta ko‘rinishda aniq topildi"
+      }
+    ],
+    "confidence": "high",
+    "elapsed": 0.21193599399998675
+  },
+  {
+    "mode": "optional",
+    "name": "shifted.png",
+    "score": 88,
+    "table": [
+      {
+        "criterion": "Proyeksiyalar to‘liqligi va joylashuvi",
+        "score": 15.0,
+        "max_score": 15.0,
+        "comment": ""
+      },
+      {
+        "criterion": "Qirqim va shtrixovka sifati",
+        "score": 10.0,
+        "max_score": 10.0,
+        "comment": ""
+      },
+      {
+        "criterion": "O‘lchamlar mavjudligi va joylashuvi",
+        "score": 7.0,
+        "max_score": 15.0,
+        "comment": "O‘lchamlar faqat bitta ko‘rinishda aniq ko‘rindi"
+      },
+      {
+        "criterion": "Chiziq semantikasi va chizmachilik qoidalari",
+        "score": 15.0,
+        "max_score": 15.0,
+        "comment": ""
+      },
+      {
+        "criterion": "Chizma tozaligi va o‘qilishi",
+        "score": 10.0,
+        "max_score": 10.0,
+        "comment": ""
+      },
+      {
+        "criterion": "Topshiriq talabiga moslik",
+        "score": 9.0,
+        "max_score": 10.0,
+        "comment": "O‘lcham evidence bor, lekin faqat bitta ko‘rinishda aniq topildi"
+      }
+    ],
+    "confidence": "high",
+    "elapsed": 0.19302628300010838
+  },
+  {
+    "mode": "optional",
+    "name": "missing_views.png",
+    "score": 69,
+    "table": [
+      {
+        "criterion": "Proyeksiyalar to‘liqligi va joylashuvi",
+        "score": 8.0,
+        "max_score": 15.0,
+        "comment": "Bitta asosiy proyeksiya yetishmaydi; Yaqqol tasvir topilmadi"
+      },
+      {
+        "criterion": "Qirqim va shtrixovka sifati",
+        "score": 10.0,
+        "max_score": 10.0,
+        "comment": ""
+      },
+      {
+        "criterion": "O‘lchamlar mavjudligi va joylashuvi",
+        "score": 7.0,
+        "max_score": 15.0,
+        "comment": "O‘lchamlar faqat bitta ko‘rinishda aniq ko‘rindi"
+      },
+      {
+        "criterion": "Chiziq semantikasi va chizmachilik qoidalari",
+        "score": 12.0,
+        "max_score": 15.0,
+        "comment": ""
+      },
+      {
+        "criterion": "Chizma tozaligi va o‘qilishi",
+        "score": 8.0,
+        "max_score": 10.0,
+        "comment": "Kontrast past, chiziqlar ajralishi sust bo‘lishi mumkin"
+      },
+      {
+        "criterion": "Topshiriq talabiga moslik",
+        "score": 7.0,
+        "max_score": 10.0,
+        "comment": "Talab qilingan proyeksiyalar soni yetarli emas: kerak=3, topildi=2"
+      }
+    ],
+    "confidence": "high",
+    "elapsed": 0.15802164299998367
+  },
+  {
+    "mode": "optional",
+    "name": "noisy.png",
+    "score": 100,
+    "table": [
+      {
+        "criterion": "Proyeksiyalar to‘liqligi va joylashuvi",
+        "score": 15.0,
+        "max_score": 15.0,
+        "comment": ""
+      },
+      {
+        "criterion": "Qirqim va shtrixovka sifati",
+        "score": 10.0,
+        "max_score": 10.0,
+        "comment": ""
+      },
+      {
+        "criterion": "O‘lchamlar mavjudligi va joylashuvi",
+        "score": 15.0,
+        "max_score": 15.0,
+        "comment": ""
+      },
+      {
+        "criterion": "Chiziq semantikasi va chizmachilik qoidalari",
+        "score": 15.0,
+        "max_score": 15.0,
+        "comment": ""
+      },
+      {
+        "criterion": "Chizma tozaligi va o‘qilishi",
+        "score": 10.0,
+        "max_score": 10.0,
+        "comment": ""
+      },
+      {
+        "criterion": "Topshiriq talabiga moslik",
+        "score": 10.0,
+        "max_score": 10.0,
+        "comment": ""
+      }
+    ],
+    "confidence": "high",
+    "elapsed": 0.2607816729998831
+  },
+  {
+    "mode": "optional",
+    "name": "blank_frame.png",
+    "score": 16,
+    "table": [
+      {
+        "criterion": "Proyeksiyalar to‘liqligi va joylashuvi",
+        "score": 0.0,
+        "max_score": 15.0,
+        "comment": "Asosiy proyeksiyalar topilmadi; Yaqqol tasvir topilmadi"
+      },
+      {
+        "criterion": "Section / hatching quality",
+        "score": 0.0,
+        "max_score": 10.0,
+        "comment": "Hatch/qirqim topilmadi. Keyin task compliance moduli qirqim talab qilingan-qilinmaganini tekshiradi."
+      },
+      {
+        "criterion": "O‘lchamlar mavjudligi va joylashuvi",
+        "score": 0.0,
+        "max_score": 15.0,
+        "comment": "Asosiy ko‘rinishlar atrofida o‘lcham evidence topilmadi"
+      },
+      {
+        "criterion": "Chiziq semantikasi va chizmachilik qoidalari",
+        "score": 0.0,
+        "max_score": 15.0,
+        "comment": "Asosiy kontur chiziqlari evidence topilmadi"
+      },
+      {
+        "criterion": "Chizma tozaligi va o‘qilishi",
+        "score": 8.0,
+        "max_score": 10.0,
+        "comment": "Kontrast past, chiziqlar ajralishi sust bo‘lishi mumkin"
+      },
+      {
+        "criterion": "Topshiriq talabiga moslik",
+        "score": 4.0,
+        "max_score": 10.0,
+        "comment": "Talab qilingan proyeksiyalar soni yetarli emas: kerak=3, topildi=0; Topshiriqda o‘lcham qo‘yish talab qilingan, lekin dimension evidence topilmadi"
+      }
+    ],
+    "confidence": "low",
+    "elapsed": 0.11354870299987851
+  }
+]
