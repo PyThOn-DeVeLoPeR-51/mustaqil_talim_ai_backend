@@ -272,13 +272,13 @@ def score_dimensions(role_result: Dict[str, Any], layout_result: Dict[str, Any],
     total = int(min(15, s_coverage + s_text + s_line_cluster + s_place))
     errors, warnings = [], []
     if dim_roles == 0:
-        errors.append("Asosiy ko‘rinishlar atrofida o‘lcham evidence topilmadi")
+        errors.append("Asosiy ko‘rinishlar atrofida o‘lcham belgi topilmadi")
     elif dim_roles == 1:
         warnings.append("O‘lchamlar faqat bitta ko‘rinishda aniq ko‘rindi")
     if total_text == 0:
-        warnings.append("O‘lcham matni/raqamlariga oid evidence juda kam")
+        warnings.append("O‘lcham matni/raqamlariga oid belgi juda kam")
     if total_lines == 0:
-        warnings.append("Dimension line evidence juda kam")
+        warnings.append("Dimension line belgi juda kam")
     if total_strong_clusters > 0 and mean_outside < 0.62:
         warnings.append("Ba’zi dimension cluster’lar role ichiga juda yaqin tushgan")
     summary = {

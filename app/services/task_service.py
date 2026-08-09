@@ -6,6 +6,7 @@ from fastapi import HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.models.student import Student
+from app.models.submission import Submission
 from app.models.task import Task, TaskAssignment
 from app.models.teacher import Teacher
 from app.schemas.task import TaskUpdate
@@ -95,7 +96,7 @@ def ensure_teacher_owns_students(
         )
 
 
-def build_task_response(db: Session, task: Task) -> dict:
+def build_task_response(db: Session, task: Task, include_reference: bool = True) -> dict:
     assigned_student_ids = (
         db.query(TaskAssignment.student_id)
         .filter(TaskAssignment.task_id == task.id)
@@ -112,7 +113,7 @@ def build_task_response(db: Session, task: Task) -> dict:
         "assessment_stage": task.assessment_stage,
         "academic_period": task.academic_period,
         "mode": task.mode,
-        "reference_file_path": task.reference_file_path,
+        "reference_file_path": task.reference_file_path if include_reference else None,
         "instruction_file_path": task.instruction_file_path,
         "deadline": task.deadline,
         "is_active": task.is_active,
@@ -324,6 +325,20 @@ def delete_teacher_task(
     db.commit()
 
 
+
+def is_reference_visible_for_student(db: Session, task_id: int, student_id: int, max_attempts: int = 2) -> bool:
+    """Etalon faylini talaba faqat barcha urinishlarni tugatgandan keyin ko‘radi."""
+
+    attempt_count = (
+        db.query(Submission.id)
+        .filter(
+            Submission.task_id == task_id,
+            Submission.student_id == student_id,
+        )
+        .count()
+    )
+    return attempt_count >= max_attempts
+
 def get_tasks_for_student(db: Session, student: Student) -> list[dict]:
     tasks = (
         db.query(Task)
@@ -336,4 +351,15 @@ def get_tasks_for_student(db: Session, student: Student) -> list[dict]:
         .all()
     )
 
-    return [build_task_response(db=db, task=task) for task in tasks]
+    return [
+        build_task_response(
+            db=db,
+            task=task,
+            include_reference=is_reference_visible_for_student(
+                db=db,
+                task_id=task.id,
+                student_id=student.id,
+            ),
+        )
+        for task in tasks
+    ]

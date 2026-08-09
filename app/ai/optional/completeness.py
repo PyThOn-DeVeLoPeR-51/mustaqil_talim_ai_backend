@@ -37,15 +37,15 @@ def score_role_presence(front_box, top_box, side_box, max_score: int = 3) -> Tup
     if front_box is not None:
         score += 1
     else:
-        errors.append("FRONT view aniqlanmadi")
+        errors.append("Old ko‘rinish aniqlanmadi")
     if top_box is not None:
         score += 1
     else:
-        errors.append("TOP view aniqlanmadi")
+        errors.append("Ustki ko‘rinish aniqlanmadi")
     if side_box is not None:
         score += 1
     else:
-        errors.append("SIDE view aniqlanmadi")
+        errors.append("Profil ko‘rinish aniqlanmadi")
     return score, errors
 
 
@@ -54,7 +54,7 @@ def score_arrangement(front_box, top_box, side_box, system: str = "first_angle",
     errors: List[str] = []
     checks: Dict[str, bool] = {}
     if front_box is None:
-        return 0, ["Arrangement tekshirish uchun FRONT yo‘q"], checks
+        return 0, ["Joylashuvni tekshirish uchun old ko‘rinish yo‘q"], checks
     fcx, fcy = _center(front_box)
     if top_box is not None:
         _, tcy = _center(top_box)
@@ -64,15 +64,15 @@ def score_arrangement(front_box, top_box, side_box, system: str = "first_angle",
         if cond_dir:
             score += 1
         else:
-            errors.append("TOP view FRONT'ga nisbatan noto‘g‘ri tomonda")
+            errors.append("Ustki ko‘rinish old ko‘rinishga nisbatan noto‘g‘ri tomonda")
         if cond_align:
             score += 1
         else:
-            errors.append("TOP view FRONT bilan vertikal o‘qda yetarli mos emas")
+            errors.append("Ustki ko‘rinish old ko‘rinish bilan vertikal o‘qda yetarli mos emas")
         checks["top_direction_ok"] = bool(cond_dir)
         checks["top_alignment_ok"] = bool(cond_align)
     else:
-        errors.append("TOP view yo‘qligi sabab arrangement tekshirilmadi")
+        errors.append("Ustki ko‘rinish yo‘qligi sabab joylashuv tekshirilmadi")
         checks["top_direction_ok"] = False
         checks["top_alignment_ok"] = False
     if side_box is not None:
@@ -83,15 +83,15 @@ def score_arrangement(front_box, top_box, side_box, system: str = "first_angle",
         if cond_side:
             score += 1
         else:
-            errors.append("SIDE view FRONT'ga nisbatan chap/o‘ngda joylashmagan")
+            errors.append("Profil ko‘rinish old ko‘rinishga nisbatan chap/o‘ng tomonda joylashmagan")
         if cond_align:
             score += 1
         else:
-            errors.append("SIDE view FRONT bilan gorizontal o‘qda yetarli mos emas")
+            errors.append("Profil ko‘rinish old ko‘rinish bilan gorizontal o‘qda yetarli mos emas")
         checks["side_direction_ok"] = bool(cond_side)
         checks["side_alignment_ok"] = bool(cond_align)
     else:
-        errors.append("SIDE view yo‘qligi sabab arrangement tekshirilmadi")
+        errors.append("Profil ko‘rinish yo‘qligi sabab joylashuv tekshirilmadi")
         checks["side_direction_ok"] = False
         checks["side_alignment_ok"] = False
     return min(score, max_score), errors, checks
@@ -111,7 +111,7 @@ def score_orthographic_completeness(role_result: Dict[str, Any], cfg: Dict[str, 
     s3, e3 = score_role_presence(front_box, top_box, side_box, cfg["score_role_max"])
     s4, e4, checks = score_arrangement(front_box, top_box, side_box, cfg["projection_system"], cfg["score_arrangement_max"])
     total = int(s1 + s2 + s3 + s4)
-    warnings = [f"{len(extra_orth)} ta ortiqcha orthographic region mavjud yoki roli aniqlanmagan"] if len(extra_orth) > 0 else []
+    warnings = [f"{len(extra_orth)} ta ortiqcha asosiy proyeksiya sohasi mavjud yoki roli aniqlanmagan"] if len(extra_orth) > 0 else []
     summary = {
         "criterion": "Proyeksiyalar to‘liqligi va joylashuvi",
         "score": int(total),

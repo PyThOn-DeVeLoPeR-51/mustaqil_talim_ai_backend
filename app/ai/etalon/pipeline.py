@@ -41,6 +41,21 @@ from app.ai.etalon.visible_view import (
     score_student_visible_stable_24,
 )
 
+
+def _is_perfect_or_near_perfect_match(metrics: dict) -> bool:
+    """Return True when the aligned student drawing is effectively identical to the etalon.
+
+    This does not change the rubric; it prevents downstream section/hatching heuristics
+    from under-scoring a drawing that has already matched the reference globally.
+    """
+
+    return (
+        float(metrics.get("similarity", 0.0)) >= 0.995
+        and float(metrics.get("coverage", 0.0)) >= 0.995
+        and float(metrics.get("missing_ratio", 1.0)) <= 0.005
+        and float(metrics.get("extra_ratio", 1.0)) <= 0.005
+    )
+
 def evaluate_etalon(reference_path: str, student_path: str, output_dir: str = "app/uploads/results") -> dict:
     """
     Backend entrypoint for etalon mode.
@@ -206,6 +221,22 @@ def evaluate_etalon(reference_path: str, student_path: str, output_dir: str = "a
         "debug": step9_debug,
     }
 
+
+    perfect_match_override = _is_perfect_or_near_perfect_match(metrics)
+    if perfect_match_override:
+        frame3 = 3
+        placement6 = 6
+        line8 = 8
+        dim12 = 12
+        proj18 = 18
+        step6_total_score = 10.0
+        step7_score = 24
+        step8_score = 15
+        step9_score = 4
+        step7_result["score"] = 24
+        step8_result["score"] = 15
+        step9_result["score"] = 4
+
     score_rows = [
         ("Ramka + burchak shtampi", frame3, 3),
         ("Chizmani to'g'ri joylashtirish", placement6, 6),
@@ -241,6 +272,7 @@ def evaluate_etalon(reference_path: str, student_path: str, output_dir: str = "a
         "reference_file": str(reference_path),
         "student_file": str(student_path),
         "grade_label": grade_label,
+        "perfect_match_override": bool(perfect_match_override),
         "student_projections": student_projections,
         "projection_boxes": projection_boxes,
         "visible_box": tuple(map(int, visible_box_step8)) if visible_box_step8 is not None else None,
@@ -278,5 +310,6 @@ def evaluate_etalon(reference_path: str, student_path: str, output_dir: str = "a
 
 
 __all__ = [
+    '_is_perfect_or_near_perfect_match',
     'evaluate_etalon',
 ]

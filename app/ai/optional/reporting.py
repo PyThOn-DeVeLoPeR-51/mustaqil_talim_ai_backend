@@ -38,9 +38,9 @@ def _make_feedback(report: Dict[str, Any]) -> List[str]:
     if ratio(mods["section_hatching"]) < 0.65:
         fb.append("Qirqim/shtrixlash sifati yoki aniqlanishida muammo bor.")
     if ratio(mods["dimensions"]) < 0.70:
-        fb.append("O‘lcham qo‘yish evidence sust yoki to‘liq emas.")
+        fb.append("O‘lcham qo‘yish belgi sust yoki to‘liq emas.")
     if ratio(mods["line_semantics"]) < 0.70:
-        fb.append("Chiziq turlari evidence yetarli emas.")
+        fb.append("Chiziq turlari belgi yetarli emas.")
     if ratio(mods["cleanliness"]) < 0.70:
         fb.append("Chizma sifati, tozaligi yoki crop holati yaxshilanishi kerak.")
     if ratio(mods["task_compliance"]) < 0.80:
@@ -60,22 +60,22 @@ def assess_layout_reliability(layout_result: Dict[str, Any], role_result: Dict[s
     title_found = bool(layout_result["meta"].get("title_block_found", False))
 
     if projection_count <= 1:
-        warnings.append("Projection count juda kam topildi; layout ishonchliligi past bo‘lishi mumkin.")
+        warnings.append("Proyeksiyalar soni juda kam topildi; joylashuvni aniqlash ishonchliligi past bo‘lishi mumkin.")
         score -= 0.35
     if projection_count >= 6:
-        warnings.append("Projection count juda ko‘p topildi; ortiqcha box yoki merge xatosi bo‘lishi mumkin.")
+        warnings.append("Proyeksiyalar soni juda ko‘p topildi; ortiqcha ramka yoki qo‘shilib ketish xatosi bo‘lishi mumkin.")
         score -= 0.20
     if orthographic_count == 0:
-        warnings.append("Orthographic role ajratilmadi.")
+        warnings.append("Asosiy proyeksiya roli ajratilmadi.")
         score -= 0.35
     elif orthographic_count > 3:
-        warnings.append("Orthographic role soni odatdagidan ko‘p.")
+        warnings.append("Asosiy proyeksiya rollari soni odatdagidan ko‘p.")
         score -= 0.15
     if not has_isometric:
         warnings.append("Yaqqol tasvir aniqlanmadi.")
         score -= 0.10
     if not title_found:
-        warnings.append("Title block topilmadi.")
+        warnings.append("Asosiy yozuv jadvali topilmadi.")
         score -= 0.05
 
     proj_boxes = layout_result.get("projection_boxes", [])
@@ -85,7 +85,7 @@ def assess_layout_reliability(layout_result: Dict[str, Any], role_result: Dict[s
         if total_proj > 0:
             largest_ratio = max(areas) / total_proj
             if largest_ratio >= 0.72:
-                warnings.append("Bitta projection box juda katta; bir nechta ko‘rinish merge bo‘lgan bo‘lishi mumkin.")
+                warnings.append("Bitta proyeksiya ramkasi juda katta; bir nechta ko‘rinish qo‘shilib ketgan bo‘lishi mumkin.")
                 score -= 0.20
 
     score = max(0.0, min(1.0, score))

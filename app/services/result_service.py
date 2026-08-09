@@ -1,3 +1,5 @@
+from copy import deepcopy
+
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
@@ -7,6 +9,66 @@ from app.models.submission import Submission
 from app.models.task import Task
 from app.models.teacher import Teacher
 
+
+
+def _student_attempt_count(db: Session, task_id: int, student_id: int) -> int:
+    return (
+        db.query(Submission.id)
+        .filter(
+            Submission.task_id == task_id,
+            Submission.student_id == student_id,
+        )
+        .count()
+    )
+
+
+def _reference_visible_to_student(db: Session, task_id: int, student_id: int, max_attempts: int = 2) -> bool:
+    return _student_attempt_count(db=db, task_id=task_id, student_id=student_id) >= max_attempts
+
+
+def _hide_reference_from_ai_json(ai_json_result):
+    if not isinstance(ai_json_result, dict):
+        return ai_json_result
+
+    cleaned = deepcopy(ai_json_result)
+    for key in (
+        "reference_file",
+        "reference_file_path",
+        "reference_path",
+        "etalon_file",
+        "etalon_file_path",
+    ):
+        cleaned.pop(key, None)
+
+    metadata = cleaned.get("drawing_ai_v2")
+    if isinstance(metadata, dict):
+        metadata = dict(metadata)
+        metadata["reference_file"] = None
+        cleaned["drawing_ai_v2"] = metadata
+
+    return cleaned
+
+
+def build_student_result_response(
+    db: Session,
+    submission: Submission,
+    task: Task | None = None,
+    student: Student | None = None,
+) -> dict:
+    response = build_result_response(
+        submission=submission,
+        task=task,
+        student=student,
+    )
+
+    if task is None or not _reference_visible_to_student(
+        db=db,
+        task_id=submission.task_id,
+        student_id=submission.student_id,
+    ):
+        response["ai_json_result"] = _hide_reference_from_ai_json(response.get("ai_json_result"))
+
+    return response
 
 def build_result_response(
     submission: Submission,
@@ -198,7 +260,8 @@ def get_student_results(
     )
 
     return [
-        build_result_response(
+        build_student_result_response(
+            db=db,
             submission=submission,
             task=task,
             student=student_obj,
@@ -225,7 +288,8 @@ def get_student_task_results(
     )
 
     return [
-        build_result_response(
+        build_student_result_response(
+            db=db,
             submission=submission,
             task=task,
             student=student_obj,
@@ -258,7 +322,8 @@ def get_student_result_by_id(
 
     submission, task, student_obj = row
 
-    return build_result_response(
+    return build_student_result_response(
+        db=db,
         submission=submission,
         task=task,
         student=student_obj,

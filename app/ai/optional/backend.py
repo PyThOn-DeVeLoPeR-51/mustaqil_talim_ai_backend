@@ -52,7 +52,7 @@ def _save_optional_overlay(outputs: Dict[str, Any], output_dir: str | Path, stem
 
     # Draw main roles with labels.
     roles = (role_result.get("roles") or {}) if isinstance(role_result, dict) else {}
-    labels = {"front": "FRONT", "top": "TOP", "side": "SIDE", "isometric": "ISO"}
+    labels = {"front": "OLD", "top": "UST", "side": "PROFIL", "isometric": "YAQQOL"}
     for role_name, label in labels.items():
         info = roles.get(role_name)
         if isinstance(info, dict) and info.get("box") is not None:

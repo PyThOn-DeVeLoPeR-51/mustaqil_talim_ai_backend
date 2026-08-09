@@ -248,9 +248,9 @@ def score_section_hatching(role_result: Dict[str, Any], bundle: Dict[str, np.nda
     present = [c for c in candidates if c["present"]]
     warnings, errors = [], []
     if len(present) == 0:
-        warnings.append("Hatch/qirqim topilmadi. Keyin task compliance moduli qirqim talab qilingan-qilinmaganini tekshiradi.")
+        warnings.append("Qirqim yoki shtrixovka topilmadi. Keyingi modul qirqim talab qilingan-qilinmaganini tekshiradi.")
         summary = {
-            "criterion": "Section / hatching quality",
+            "criterion": "Qirqim va shtrixovka sifati",
             "score": 0,
             "max_score": 10,
             "applicable": False,
@@ -271,29 +271,29 @@ def score_section_hatching(role_result: Dict[str, Any], bundle: Dict[str, np.nda
         s_angle = 1
     else:
         s_angle = 0
-        errors.append("Hatch chiziqlari burchagi yetarli darajada bir xil emas")
+        errors.append("Shtrixovka chiziqlari burchagi yetarli darajada bir xil emas")
     spacing_cv = None if best["spacing_cv"] is None else float(best["spacing_cv"])
     if spacing_cv is None:
         s_spacing = 1
-        warnings.append("Hatch spacing regularity to‘liq baholanmadi")
+        warnings.append("Shtrixovka chiziqlari oralig‘i muntazamligi to‘liq baholanmadi")
     elif spacing_cv <= 0.35:
         s_spacing = 2
     elif spacing_cv <= 0.70:
         s_spacing = 1
     else:
         s_spacing = 0
-        errors.append("Hatch chiziqlari oralig‘i notekis")
+        errors.append("Shtrixovka chiziqlari oralig‘i notekis")
     coverage = 0.0 if best["coverage"] is None else float(best["coverage"])
     parallel_ratio = 0.0 if best["parallel_ratio"] is None else float(best["parallel_ratio"])
     region_quality_score = 0
     if 0.004 <= coverage <= 0.24:
         region_quality_score += 1
     else:
-        warnings.append("Hatch coverage juda kichik yoki juda katta ko‘rinadi")
+        warnings.append("Shtrixovka qamrovi juda kichik yoki juda katta ko‘rinadi")
     if parallel_ratio >= 0.70:
         region_quality_score += 1
     elif parallel_ratio < cfg["hatch_min_parallel_ratio"]:
-        errors.append("Hatch diagonallari yetarli darajada parallel emas")
+        errors.append("Shtrixovka diagonallari yetarli darajada parallel emas")
     total = int(min(10, s_presence + s_angle + s_spacing + region_quality_score))
     summary = {
         "criterion": "Qirqim va shtrixovka sifati",

@@ -83,11 +83,11 @@ def score_task_compliance(task_text: str, role_result: Dict[str, Any], score2_re
     if req["requires_isometric"] and not iso_ok:
         errors.append("Topshiriqda yaqqol tasvir talab qilingan, lekin topilmadi")
     if req["requires_section"] and not section_ok:
-        errors.append("Topshiriqda qirqim/kesim talab qilingan, lekin evidence topilmadi")
+        errors.append("Topshiriqda qirqim/kesim talab qilingan, lekin belgi topilmadi")
     if req["requires_dimensions"] and not has_dimension_evidence:
-        errors.append("Topshiriqda o‘lcham qo‘yish talab qilingan, lekin dimension evidence topilmadi")
+        errors.append("Topshiriqda o‘lcham qo‘yish talab qilingan, lekin o‘lcham qo‘yish belgisi topilmadi")
     elif req["requires_dimensions"] and dim_roles == 1:
-        warnings.append("O‘lcham evidence bor, lekin faqat bitta ko‘rinishda aniq topildi")
+        warnings.append("O‘lcham qo‘yish belgisi bor, lekin faqat bitta ko‘rinishda aniq topildi")
     summary = {
         "criterion": "Topshiriq talabiga moslik",
         "score": int(total),

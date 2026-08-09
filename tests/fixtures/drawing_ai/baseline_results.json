@@ -2,7 +2,7 @@
   {
     "mode": "etalon",
     "name": "identical.png",
-    "score": 69.0,
+    "score": 100.0,
     "table": [
       {
         "criterion": "Ramka + burchak shtampi",
@@ -30,15 +30,15 @@
       },
       {
         "criterion": "Proyeksiyalar soni",
-        "score": 12.0,
+        "score": 18.0,
         "max_score": 18.0,
-        "percent": 66.67
+        "percent": 100.0
       },
       {
         "criterion": "Proyeksiyalarda qirqim bajarilganligi",
-        "score": 0.0,
+        "score": 10.0,
         "max_score": 10.0,
-        "percent": 0.0
+        "percent": 100.0
       },
       {
         "criterion": "Yaqqol tasvir to'g'riligi",
@@ -48,9 +48,9 @@
       },
       {
         "criterion": "Yaqqol tasvirda qirqim bajarilganligi",
-        "score": 0.0,
+        "score": 15.0,
         "max_score": 15.0,
-        "percent": 0.0
+        "percent": 100.0
       },
       {
         "criterion": "Chizma tozaligi",
@@ -59,12 +59,12 @@
         "percent": 100.0
       }
     ],
-    "elapsed": 0.7055066349998924
+    "elapsed": 0.8084082930000136
   },
   {
     "mode": "etalon",
     "name": "shifted.png",
-    "score": 55.33,
+    "score": 61.33,
     "table": [
       {
         "criterion": "Ramka + burchak shtampi",
@@ -92,9 +92,9 @@
       },
       {
         "criterion": "Proyeksiyalar soni",
-        "score": 12.0,
+        "score": 18.0,
         "max_score": 18.0,
-        "percent": 66.67
+        "percent": 100.0
       },
       {
         "criterion": "Proyeksiyalarda qirqim bajarilganligi",
@@ -121,12 +121,12 @@
         "percent": 75.0
       }
     ],
-    "elapsed": 0.5669743450000624
+    "elapsed": 0.6598663789999932
   },
   {
     "mode": "etalon",
     "name": "missing_views.png",
-    "score": 32.33,
+    "score": 38.33,
     "table": [
       {
         "criterion": "Ramka + burchak shtampi",
@@ -154,9 +154,9 @@
       },
       {
         "criterion": "Proyeksiyalar soni",
-        "score": 6.0,
+        "score": 12.0,
         "max_score": 18.0,
-        "percent": 33.33
+        "percent": 66.67
       },
       {
         "criterion": "Proyeksiyalarda qirqim bajarilganligi",
@@ -183,12 +183,12 @@
         "percent": 100.0
       }
     ],
-    "elapsed": 0.6086118460000307
+    "elapsed": 0.6276922509999849
   },
   {
     "mode": "etalon",
     "name": "noisy.png",
-    "score": 70.33,
+    "score": 76.33,
     "table": [
       {
         "criterion": "Ramka + burchak shtampi",
@@ -216,9 +216,9 @@
       },
       {
         "criterion": "Proyeksiyalar soni",
-        "score": 12.0,
+        "score": 18.0,
         "max_score": 18.0,
-        "percent": 66.67
+        "percent": 100.0
       },
       {
         "criterion": "Proyeksiyalarda qirqim bajarilganligi",
@@ -245,7 +245,7 @@
         "percent": 50.0
       }
     ],
-    "elapsed": 0.863908586999969
+    "elapsed": 0.9213649360000318
   },
   {
     "mode": "etalon",
@@ -307,7 +307,7 @@
         "percent": 100.0
       }
     ],
-    "elapsed": 0.5316344160000881
+    "elapsed": 0.5582512189999989
   },
   {
     "mode": "optional",
@@ -348,11 +348,11 @@
         "criterion": "Topshiriq talabiga moslik",
         "score": 9.0,
         "max_score": 10.0,
-        "comment": "O‘lcham evidence bor, lekin faqat bitta ko‘rinishda aniq topildi"
+        "comment": "O‘lcham qo‘yish belgisi bor, lekin faqat bitta ko‘rinishda aniq topildi"
       }
     ],
     "confidence": "high",
-    "elapsed": 0.21193599399998675
+    "elapsed": 0.23031417100003182
   },
   {
     "mode": "optional",
@@ -393,11 +393,11 @@
         "criterion": "Topshiriq talabiga moslik",
         "score": 9.0,
         "max_score": 10.0,
-        "comment": "O‘lcham evidence bor, lekin faqat bitta ko‘rinishda aniq topildi"
+        "comment": "O‘lcham qo‘yish belgisi bor, lekin faqat bitta ko‘rinishda aniq topildi"
       }
     ],
     "confidence": "high",
-    "elapsed": 0.19302628300010838
+    "elapsed": 0.2042898469999841
   },
   {
     "mode": "optional",
@@ -442,7 +442,7 @@
       }
     ],
     "confidence": "high",
-    "elapsed": 0.15802164299998367
+    "elapsed": 0.18352550699995618
   },
   {
     "mode": "optional",
@@ -487,7 +487,7 @@
       }
     ],
     "confidence": "high",
-    "elapsed": 0.2607816729998831
+    "elapsed": 0.23079153099996574
   },
   {
     "mode": "optional",
@@ -501,22 +501,22 @@
         "comment": "Asosiy proyeksiyalar topilmadi; Yaqqol tasvir topilmadi"
       },
       {
-        "criterion": "Section / hatching quality",
+        "criterion": "Qirqim va shtrixovka sifati",
         "score": 0.0,
         "max_score": 10.0,
-        "comment": "Hatch/qirqim topilmadi. Keyin task compliance moduli qirqim talab qilingan-qilinmaganini tekshiradi."
+        "comment": "Qirqim yoki shtrixovka topilmadi. Keyingi modul qirqim talab qilingan-qilinmaganini tekshiradi."
       },
       {
         "criterion": "O‘lchamlar mavjudligi va joylashuvi",
         "score": 0.0,
         "max_score": 15.0,
-        "comment": "Asosiy ko‘rinishlar atrofida o‘lcham evidence topilmadi"
+        "comment": "Asosiy ko‘rinishlar atrofida o‘lcham belgi topilmadi"
       },
       {
         "criterion": "Chiziq semantikasi va chizmachilik qoidalari",
         "score": 0.0,
         "max_score": 15.0,
-        "comment": "Asosiy kontur chiziqlari evidence topilmadi"
+        "comment": "Asosiy kontur chiziqlari belgi topilmadi"
       },
       {
         "criterion": "Chizma tozaligi va o‘qilishi",
@@ -528,10 +528,10 @@
         "criterion": "Topshiriq talabiga moslik",
         "score": 4.0,
         "max_score": 10.0,
-        "comment": "Talab qilingan proyeksiyalar soni yetarli emas: kerak=3, topildi=0; Topshiriqda o‘lcham qo‘yish talab qilingan, lekin dimension evidence topilmadi"
+        "comment": "Talab qilingan proyeksiyalar soni yetarli emas: kerak=3, topildi=0; Topshiriqda o‘lcham qo‘yish talab qilingan, lekin o‘lcham qo‘yish belgisi topilmadi"
       }
     ],
     "confidence": "low",
-    "elapsed": 0.11354870299987851
+    "elapsed": 0.11348064700001714
   }
 ]

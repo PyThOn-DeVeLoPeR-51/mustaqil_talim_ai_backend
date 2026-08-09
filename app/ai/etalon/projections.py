@@ -659,6 +659,226 @@ def build_visual_debug_region(lines_255, display_h, mx_ratio=0.03, my_ratio=0.02
     return vis_raw, vis_clean, vis_long_mask, vis_candidate
 
 
+def _box_contains(outer, inner, center_required=True, area_ratio=0.70):
+    ox1, oy1, ox2, oy2 = outer
+    ix1, iy1, ix2, iy2 = inner
+    if center_required:
+        cx = (ix1 + ix2) / 2.0
+        cy = (iy1 + iy2) / 2.0
+        center_inside = ox1 <= cx <= ox2 and oy1 <= cy <= oy2
+    else:
+        center_inside = True
+    inter_x1 = max(ox1, ix1)
+    inter_y1 = max(oy1, iy1)
+    inter_x2 = min(ox2, ix2)
+    inter_y2 = min(oy2, iy2)
+    inter = max(0, inter_x2 - inter_x1) * max(0, inter_y2 - inter_y1)
+    return center_inside and inter >= area_ratio * max(1, box_area(inner))
+
+
+def _looks_like_title_block(box, image_shape):
+    H, W = image_shape[:2]
+    x1, y1, x2, y2 = box
+    bw = x2 - x1
+    bh = y2 - y1
+    cx = (x1 + x2) / 2.0
+    cy = (y1 + y2) / 2.0
+
+    bottom_right_table = (
+        cx >= 0.58 * W and cy >= 0.72 * H and bw >= 0.18 * W and bh >= 0.08 * H
+    )
+    touches_bottom_right = (
+        x1 >= 0.50 * W and y2 >= 0.90 * H and bw >= 0.16 * W
+    )
+    very_low_table = (
+        y1 >= 0.72 * H and bw >= 0.20 * W and bh >= 0.06 * H
+    )
+    return bool(bottom_right_table or touches_bottom_right or very_low_table)
+
+
+def _prepare_component_projection_mask(lines_255, mx_ratio=0.03, my_ratio=0.02, band_ratio=0.06):
+    """Build a full-page mask for projection-component detection.
+
+    The legacy projection counter mainly scans a top band. Real submissions often place
+    the third orthographic view lower on the sheet, or connect views with long layout
+    lines. This mask keeps the original binary evidence but removes page-border lines
+    and tiny noise before full-page connected-component analysis.
+    """
+    H, W = lines_255.shape[:2]
+    clean, long_mask = remove_border_long_lines_only(lines_255.copy(), band_ratio=band_ratio)
+
+    mx = int(W * mx_ratio)
+    my = int(H * my_ratio)
+    clean[:my, :] = 0
+    clean[:, :mx] = 0
+    clean[:, W - mx:] = 0
+
+    clean = remove_tiny_components(clean, min_area=max(18, int(0.00006 * clean.size)))
+    clean = cv2.morphologyEx(clean, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3)), iterations=1)
+    return clean, long_mask
+
+
+def _remove_nested_projection_boxes(candidates):
+    if not candidates:
+        return []
+    candidates = sorted(candidates, key=lambda c: box_area(c["box"]), reverse=True)
+    keep = []
+    for cand in candidates:
+        box = cand["box"]
+        nested = False
+        for kept in keep:
+            kept_box = kept["box"]
+            if _box_contains(kept_box, box, center_required=True, area_ratio=0.62) and box_area(box) <= 0.55 * box_area(kept_box):
+                nested = True
+                break
+        if not nested:
+            keep.append(cand)
+    return keep
+
+
+def component_projection_candidates_full_page(
+    lines_255: np.ndarray,
+    expected_proj=3,
+    mx_ratio=0.03,
+    my_ratio=0.02,
+    band_ratio=0.06,
+):
+    """Detect orthographic projection candidates using full-page components.
+
+    This detector is intentionally conservative: it supplements the legacy top-band
+    projection counter when it finds more orthographic-looking boxes. It filters out
+    title-block tables, dimension-only strokes, nested inner geometry and diagonal
+    axonometric views, while preserving the locked /18 scoring formula.
+    """
+    H, W = lines_255.shape[:2]
+    clean, long_mask = _prepare_component_projection_mask(
+        lines_255, mx_ratio=mx_ratio, my_ratio=my_ratio, band_ratio=band_ratio
+    )
+
+    mask = (clean > 0).astype(np.uint8)
+    num, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+
+    min_w = max(24, int(W * 0.045))
+    min_h = max(24, int(H * 0.045))
+    min_area = max(140, int(W * H * 0.00075))
+    candidates = []
+    debug_components = []
+
+    for i in range(1, num):
+        x = int(stats[i, cv2.CC_STAT_LEFT])
+        y = int(stats[i, cv2.CC_STAT_TOP])
+        w = int(stats[i, cv2.CC_STAT_WIDTH])
+        h = int(stats[i, cv2.CC_STAT_HEIGHT])
+        area = int(stats[i, cv2.CC_STAT_AREA])
+        box = [x, y, x + w, y + h]
+
+        reason = "candidate"
+        keep = True
+        if area < min_area or w < min_w or h < min_h:
+            keep = False
+            reason = "size"
+        elif w > 0.88 * W and h > 0.80 * H:
+            keep = False
+            reason = "sheet_border"
+        elif _looks_like_title_block(box, clean.shape):
+            keep = False
+            reason = "title_block"
+        elif h <= max(16, int(H * 0.035)) or w <= max(12, int(W * 0.014)):
+            keep = False
+            reason = "dimension_or_axis_line"
+
+        feat = {"hv_struct_ratio": 0.0, "hv_line_ratio": 0.0, "hv_len": 0.0, "diag_len": 0.0, "total_pixels": 0}
+        refined = box
+        score = -1e9
+        if keep:
+            roi = np.zeros((h, w), dtype=np.uint8)
+            roi[labels[y:y + h, x:x + w] == i] = 255
+            feat = orientation_features(roi)
+            hvs = float(feat["hv_struct_ratio"])
+            hvl = float(feat["hv_line_ratio"])
+            hv_len = float(feat["hv_len"])
+            diag_len = float(feat["diag_len"])
+
+            diagonal_view = (diag_len > hv_len * 0.80 and hvl < 0.62 and hvs < 0.70)
+            orthographic_like = (
+                (hvs >= 0.55 and hvl >= 0.62)
+                or (hvs >= 0.78 and hvl >= 0.48)
+                or (hvl >= 0.82 and hv_len >= max(60.0, diag_len * 1.10))
+            )
+            if diagonal_view:
+                keep = False
+                reason = "diagonal_visual_view"
+            elif not orthographic_like:
+                keep = False
+                reason = "not_orthographic_like"
+            else:
+                refined = refine_box_full_extent(
+                    clean,
+                    box,
+                    xpad_ratio=0.035,
+                    ypad_ratio=0.035,
+                    min_col_occ=0.005,
+                    min_row_occ=0.005,
+                )
+                rw = refined[2] - refined[0]
+                rh = refined[3] - refined[1]
+                refined_area = box_area(refined)
+                area_norm = min(1.8, area / max(1.0, W * H * 0.006))
+                position_penalty = 0.35 if _looks_like_title_block(refined, clean.shape) else 0.0
+                score = (
+                    2.4 * hvs +
+                    2.0 * hvl +
+                    0.9 * area_norm +
+                    0.25 * min(rw / max(1.0, W * 0.16), 1.5) +
+                    0.20 * min(rh / max(1.0, H * 0.16), 1.5) -
+                    position_penalty
+                )
+
+        item = {
+            "box": list(map(int, refined)),
+            "raw_box": list(map(int, box)),
+            "area": int(area),
+            "score": round(float(score), 3),
+            "hv_struct_ratio": round(float(feat.get("hv_struct_ratio", 0.0)), 3),
+            "hv_line_ratio": round(float(feat.get("hv_line_ratio", 0.0)), 3),
+            "hv_len": round(float(feat.get("hv_len", 0.0)), 1),
+            "diag_len": round(float(feat.get("diag_len", 0.0)), 1),
+            "keep": bool(keep),
+            "reason": reason,
+        }
+        debug_components.append(item)
+        if keep:
+            candidates.append(item)
+
+    candidates = _remove_nested_projection_boxes(candidates)
+    candidates = sorted(candidates, key=lambda c: c["score"], reverse=True)
+
+    selected = []
+    for cand in candidates:
+        box = cand["box"]
+        if any(box_iou(box, kept["box"]) >= 0.35 for kept in selected):
+            continue
+        selected.append(cand)
+        if len(selected) >= expected_proj:
+            break
+
+    selected_boxes = [c["box"] for c in selected]
+    selected_boxes = sorted(dedupe_boxes(selected_boxes, iou_thr=0.35), key=lambda b: (b[1], b[0]))
+
+    candidate_vis = cv2.cvtColor(clean, cv2.COLOR_GRAY2RGB)
+    for b in selected_boxes:
+        cv2.rectangle(candidate_vis, (int(b[0]), int(b[1])), (int(b[2]), int(b[3])), (0, 255, 0), 2)
+
+    dbg = {
+        "detector": "full_page_component_v2",
+        "valid_boxes": selected_boxes,
+        "component_count": int(num - 1),
+        "selected_count": int(len(selected_boxes)),
+        "components": debug_components,
+    }
+    return len(selected_boxes), dbg, clean, long_mask, candidate_vis, selected_boxes
+
+
 def detect_boxes_on_fixed_top(
     lines_255: np.ndarray,
     ycut: int,
@@ -875,16 +1095,53 @@ def count_projection_groups_final(
         })
 
     best = sorted(all_results, key=lambda r: (r["score"], r["cnt"]), reverse=True)[0]
-    dbg = dict(best["dbg"])
+
+    comp_cnt, comp_dbg, comp_clean, comp_long_mask, comp_candidate_vis, comp_boxes = component_projection_candidates_full_page(
+        lines_255,
+        expected_proj=3,
+        mx_ratio=mx_ratio,
+        my_ratio=my_ratio,
+        band_ratio=band_ratio,
+    )
+
+    use_component = False
+    if comp_cnt > int(best["cnt"]):
+        use_component = True
+    elif int(best["cnt"]) == 1 and comp_cnt >= 2:
+        use_component = True
+
+    if use_component:
+        selected = {
+            "score": float(150.0 * comp_cnt),
+            "cnt": int(comp_cnt),
+            "dbg": comp_dbg,
+            "top_raw": lines_255.copy(),
+            "top_clean": comp_clean,
+            "long_mask": comp_long_mask,
+            "candidate_vis": comp_candidate_vis,
+            "boxes": comp_boxes,
+            "ycut": int(lines_255.shape[0]),
+            "xprof_s": np.array([]),
+        }
+    else:
+        selected = best
+
+    dbg = dict(selected["dbg"])
     dbg["candidate_ycuts"] = ycut_candidates
     dbg["all_scores"] = [
         {"ycut": int(r["ycut"]), "cnt": int(r["cnt"]), "score": round(float(r["score"]), 3), "valid_boxes": r["boxes"]}
         for r in all_results
     ]
+    dbg["component_detector"] = {
+        "used": bool(use_component),
+        "cnt": int(comp_cnt),
+        "valid_boxes": comp_boxes,
+        "debug": comp_dbg,
+    }
 
     return (
-        int(best["cnt"]), dbg, best["top_raw"], best["top_clean"], best["long_mask"],
-        best["candidate_vis"], best["boxes"], int(best["ycut"]), best["xprof_s"]
+        int(selected["cnt"]), dbg, selected["top_raw"], selected["top_clean"], selected["long_mask"],
+        selected["candidate_vis"], selected["boxes"], int(selected["ycut"]), selected["xprof_s"]
     )
 
 
@@ -992,6 +1249,7 @@ __all__ = [
     'dedupe_boxes',
     'draw_boxes_on_rgb',
     'build_visual_debug_region',
+    'component_projection_candidates_full_page',
     'detect_boxes_on_fixed_top',
     'count_projection_groups_final',
     'score_projections_18',

@@ -191,15 +191,15 @@ def score_line_semantics(role_result: Dict[str, Any], bundle: Dict[str, np.ndarr
     total = int(min(15, s_visible + s_hidden + s_center + s_div))
     errors, warnings = [], []
     if visible_roles == 0:
-        errors.append("Asosiy kontur chiziqlari evidence topilmadi")
+        errors.append("Asosiy kontur chiziqlari belgi topilmadi")
     elif visible_roles == 1:
         warnings.append("Kontur chiziqlari faqat bitta ko‘rinishda aniq ko‘rindi")
     if hidden_roles == 0:
-        warnings.append("Shtrix/yashirin chiziqlar evidence juda kam")
+        warnings.append("Shtrix/yashirin chiziqlar belgi juda kam")
     if center_roles == 0:
-        warnings.append("Markaz chiziqlari evidence topilmadi yoki juda sust")
+        warnings.append("Markaz chiziqlari belgi topilmadi yoki juda sust")
     if strong_center_roles == 0 and center_roles >= 1:
-        warnings.append("Markaz chiziqlari kuchsiz evidence bilan topildi")
+        warnings.append("Markaz chiziqlari kuchsiz belgi bilan topildi")
     summary = {
         "criterion": "Chiziq semantikasi va chizmachilik qoidalari",
         "score": int(total),

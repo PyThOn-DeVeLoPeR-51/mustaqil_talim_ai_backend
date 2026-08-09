@@ -37,6 +37,16 @@ CONFIG: Dict[str, Any] = {
     "merge_gap_px": 28,
     "draw_zone_pad": 12,
 
+    # Conservative ISO/profile split for cases where close projections are merged.
+    "mixed_split_min_width_ratio": 0.32,
+    "mixed_split_min_area_ratio": 0.12,
+    "mixed_split_hough_threshold": 34,
+    "mixed_split_hough_gap": 12,
+    "mixed_split_min_mask_pixels": 40,
+    "mixed_split_pad": 12,
+    "mixed_split_max_iou": 0.62,
+    "mixed_split_min_center_distance": 0.18,
+
     # safe title refinement
     "tb_safe_row_thr_ratio": 0.18,
     "tb_safe_col_thr_ratio": 0.16,

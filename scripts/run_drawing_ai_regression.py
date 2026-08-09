@@ -1,4 +1,4 @@
-"""Run the locked Drawing AI v1-score regression suite.
+"""Run the locked Drawing AI score regression suite.
 
 Usage:
     python scripts/run_drawing_ai_regression.py
