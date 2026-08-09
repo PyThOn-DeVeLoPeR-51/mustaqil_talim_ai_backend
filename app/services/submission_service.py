@@ -148,6 +148,7 @@ def create_submission_for_student(
             mode=task.mode,
             student_file_path=uploaded_file_path,
             reference_file_path=task.reference_file_path,
+            task_text=task.description or "",
         )
 
         submission.total_score = ai_result["total_score"]

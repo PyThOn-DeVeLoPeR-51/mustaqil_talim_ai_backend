@@ -1,128 +1,101 @@
+"""Application service for Drawing AI evaluations.
+
+The public function is intentionally kept backward compatible with the original
+submission flow.  The implementation delegates to the typed Drawing AI v2
+engine, which validates inputs and locks the existing scoring rubrics.
+"""
+
+from __future__ import annotations
+
 from pathlib import Path
 from typing import Any
 
 from fastapi import HTTPException, status
 
+from app.ai.drawing_ai_v2 import (
+    DrawingEvaluationEngine,
+    EvaluationMode,
+    EvaluationRequest,
+)
+from app.ai.drawing_ai_v2.exceptions import (
+    DrawingAIConfigurationError,
+    DrawingAIError,
+    DrawingAIValidationError,
+)
+from app.ai.drawing_ai_v2.normalization import normalize_result
+
 
 RESULTS_DIR = Path("app/uploads/results")
+_ENGINE = DrawingEvaluationEngine()
 
 
 def normalize_ai_result(result: dict[str, Any]) -> dict[str, Any]:
-    """
-    Etalon va ixtiyoriy rejimdan qaytgan natijani bitta formatga keltiradi.
-    """
+    """Normalize legacy evaluator output to the existing submission contract."""
 
-    if not isinstance(result, dict):
-        raise ValueError("AI result dict formatida bo‘lishi kerak.")
-
-    score_keys = [
-        "total_score",
-        "score",
-        "final_score",
-        "overall_score",
-        "total_ball",
-        "ball",
-    ]
-
-    total_score = None
-
-    for key in score_keys:
-        if key in result and result[key] is not None:
-            total_score = result[key]
-            break
-
-    if total_score is None:
-        raise ValueError("AI natijasida total_score topilmadi.")
-
-    try:
-        total_score = float(total_score)
-    except (TypeError, ValueError):
-        raise ValueError("total_score son bo‘lishi kerak.")
-
-    details = (
-        result.get("details")
-        or result.get("ai_json_result")
-        or result.get("json_result")
-        or {}
-    )
-
-    overlay_path = (
-        result.get("overlay_path")
-        or result.get("overlay")
-        or result.get("overlay_file")
-    )
-
-    table_json = (
-        result.get("table_json")
-        or result.get("table")
-        or result.get("rows")
-        or []
-    )
-
-    if isinstance(table_json, dict):
-        table_json = [table_json]
-
-    if table_json is None:
-        table_json = []
-
-    if not isinstance(table_json, list):
-        table_json = []
-
-    return {
-        "total_score": total_score,
-        "ai_json_result": details,
-        "overlay_path": overlay_path,
-        "table_json": table_json,
-    }
+    return normalize_result(result).to_dict()
 
 
 def evaluate_submission_with_ai(
     mode: str,
     student_file_path: str,
     reference_file_path: str | None = None,
+    task_text: str = "",
 ) -> dict[str, Any]:
-    """
-    Submission uchun AI baholashni ishga tushiradi.
-    mode == etalon   -> evaluate_etalon()
-    mode == optional -> evaluate_optional()
-    """
+    """Evaluate a student drawing without changing the existing score criteria.
 
-    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    Parameters
+    ----------
+    mode:
+        ``etalon`` or ``optional``.
+    student_file_path:
+        Saved student drawing path.
+    reference_file_path:
+        Required only for etalon mode.
+    task_text:
+        Teacher task description for optional-mode requirement parsing.  The
+        criterion weight and scoring formula remain unchanged.
+    """
 
     try:
-        if mode == "etalon":
-            if not reference_file_path:
-                raise ValueError("Etalon rejim uchun reference_file_path kerak.")
+        evaluation_mode = EvaluationMode(mode)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="mode faqat 'etalon' yoki 'optional' bo‘lishi mumkin.",
+        ) from exc
 
-            from app.ai.etalon_mode_final_backend import evaluate_etalon
+    request = EvaluationRequest(
+        mode=evaluation_mode,
+        student_path=Path(student_file_path),
+        reference_path=Path(reference_file_path) if reference_file_path else None,
+        output_dir=RESULTS_DIR,
+        task_text=task_text or "",
+    )
 
-            raw_result = evaluate_etalon(
-                reference_path=reference_file_path,
-                student_path=student_file_path,
-                output_dir=str(RESULTS_DIR),
-            )
-
-        elif mode == "optional":
-            from app.ai.optional_mode_v1_backend import evaluate_optional
-
-            raw_result = evaluate_optional(
-                student_path=student_file_path,
-                output_dir=str(RESULTS_DIR),
-            )
-
-        else:
-            raise ValueError("mode faqat 'etalon' yoki 'optional' bo‘lishi mumkin.")
-
-        return normalize_ai_result(raw_result)
-
-    except ImportError as error:
+    try:
+        return _ENGINE.evaluate(request).to_dict()
+    except DrawingAIValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Drawing AI input xatosi: {exc}",
+        ) from exc
+    except DrawingAIConfigurationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Drawing AI konfiguratsiya xatosi: {exc}",
+        ) from exc
+    except ImportError as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"AI fayl yoki funksiya import qilinmadi: {error}",
-        )
-
-    except Exception as error:
+            detail=f"AI modul yoki dependency import qilinmadi: {exc}",
+        ) from exc
+    except DrawingAIError as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"AI baholashda xatolik: {error}",
-        )
+            detail=f"Drawing AI natija xatosi: {exc}",
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"AI baholashda kutilmagan xatolik: {exc}",
+        ) from exc
