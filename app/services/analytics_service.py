@@ -1,4 +1,8 @@
+from __future__ import annotations
+
+import math
 from collections import defaultdict
+from statistics import median
 from typing import Any, cast
 
 from sqlalchemy.orm import Session
@@ -29,11 +33,51 @@ CRITERIA_LABELS = [
 PASSING_SCORE = 56.0
 
 
+def _round(value: float | None, digits: int = 2) -> float | None:
+    if value is None or not math.isfinite(value):
+        return None
+    return round(value, digits)
+
+
 def _average(values: list[float]) -> float | None:
     if not values:
         return None
 
-    return round(sum(values) / len(values), 2)
+    return _round(sum(values) / len(values))
+
+
+def _sample_sd(values: list[float]) -> float | None:
+    if len(values) < 2:
+        return None
+
+    mean_value = sum(values) / len(values)
+    variance = sum((value - mean_value) ** 2 for value in values) / (
+        len(values) - 1
+    )
+    return _round(math.sqrt(variance))
+
+
+def _descriptive_stats(values: list[float]) -> dict[str, Any]:
+    cleaned = [value for value in values if math.isfinite(value)]
+
+    if not cleaned:
+        return {
+            "count": 0,
+            "mean": None,
+            "median": None,
+            "standard_deviation": None,
+            "minimum": None,
+            "maximum": None,
+        }
+
+    return {
+        "count": len(cleaned),
+        "mean": _average(cleaned),
+        "median": _round(float(median(cleaned))),
+        "standard_deviation": _sample_sd(cleaned),
+        "minimum": _round(min(cleaned)),
+        "maximum": _round(max(cleaned)),
+    }
 
 
 def _safe_score(value: Any) -> float | None:
@@ -70,6 +114,71 @@ def _canonical_mode(value: str | None) -> str | None:
     return normalized or None
 
 
+def _percent_growth(before: float | None, after: float | None) -> float | None:
+    if before is None or after is None or abs(before) < 1e-9:
+        return None
+
+    return _round((after - before) / before * 100)
+
+
+def _normal_two_sided_p_value(t_value: float) -> float:
+    return max(0.0, min(1.0, math.erfc(abs(t_value) / math.sqrt(2))))
+
+
+def _student_t_pdf(x: float, degrees_of_freedom: float) -> float:
+    coefficient = math.exp(
+        math.lgamma((degrees_of_freedom + 1) / 2)
+        - math.lgamma(degrees_of_freedom / 2)
+    ) / math.sqrt(degrees_of_freedom * math.pi)
+    return coefficient * (
+        1 + (x * x) / degrees_of_freedom
+    ) ** (-(degrees_of_freedom + 1) / 2)
+
+
+def _student_t_two_sided_p_value(
+    t_value: float | None,
+    degrees_of_freedom: float | None,
+) -> float | None:
+    if (
+        t_value is None
+        or degrees_of_freedom is None
+        or degrees_of_freedom <= 0
+        or not math.isfinite(t_value)
+    ):
+        return None
+
+    absolute_t = abs(t_value)
+
+    if absolute_t == 0:
+        return 1.0
+
+    if degrees_of_freedom > 120:
+        return _round(_normal_two_sided_p_value(absolute_t), 4)
+
+    # Numerical integration of the t-density from 0 to |t| with Simpson's rule.
+    # This avoids adding scipy as a production dependency and is accurate enough
+    # for dashboard screening. Final publication statistics should still be
+    # verified with R, Jamovi, SPSS, Python/scipy, or another statistical package.
+    intervals = 1200
+    if intervals % 2:
+        intervals += 1
+
+    step = absolute_t / intervals
+    total = _student_t_pdf(0.0, degrees_of_freedom) + _student_t_pdf(
+        absolute_t,
+        degrees_of_freedom,
+    )
+
+    for index in range(1, intervals):
+        weight = 4 if index % 2 else 2
+        total += weight * _student_t_pdf(index * step, degrees_of_freedom)
+
+    area = total * step / 3
+    cdf = 0.5 + area
+    p_value = 2 * (1 - cdf)
+    return _round(max(0.0, min(1.0, p_value)), 4)
+
+
 def _latest_rows_by_task(
     rows: list[tuple[Submission, Task, Student]],
 ) -> list[tuple[Submission, Task, Student]]:
@@ -98,27 +207,6 @@ def _latest_rows_by_task(
             existing_submission.id,
         ):
             latest[key] = row
-
-    return list(latest.values())
-
-
-def _latest_rows_by_student(
-    rows: list[tuple[Submission, Task, Student]],
-) -> list[tuple[Submission, Task, Student]]:
-    latest: dict[int, tuple[Submission, Task, Student]] = {}
-
-    for row in rows:
-        submission, _, student = row
-        existing = latest.get(student.id)
-
-        if existing is None:
-            latest[student.id] = row
-            continue
-
-        existing_submission = existing[0]
-
-        if submission.id > existing_submission.id:
-            latest[student.id] = row
 
     return list(latest.values())
 
@@ -165,30 +253,44 @@ def _student_averages(
     return list(_student_average_map(rows).values())
 
 
-def _stage_student_averages(
+def _stage_student_average_map(
     rows: list[tuple[Submission, Task, Student]],
     assessment_stage: str,
-) -> list[float]:
+) -> dict[int, float]:
     selected_rows = [
         row
         for row in rows
         if row[1].assessment_stage == assessment_stage
     ]
 
-    return _student_averages(selected_rows)
+    return _student_average_map(selected_rows)
 
 
-def _week_student_averages(
+def _stage_student_averages(
+    rows: list[tuple[Submission, Task, Student]],
+    assessment_stage: str,
+) -> list[float]:
+    return list(_stage_student_average_map(rows, assessment_stage).values())
+
+
+def _week_student_average_map(
     rows: list[tuple[Submission, Task, Student]],
     week_number: int,
-) -> list[float]:
+) -> dict[int, float]:
     selected_rows = [
         row
         for row in rows
         if row[1].week_number == week_number
     ]
 
-    return _student_averages(selected_rows)
+    return _student_average_map(selected_rows)
+
+
+def _week_student_averages(
+    rows: list[tuple[Submission, Task, Student]],
+    week_number: int,
+) -> list[float]:
+    return list(_week_student_average_map(rows, week_number).values())
 
 
 def _second_attempt_growth(
@@ -326,7 +428,7 @@ def _criterion_score(
 
 def _build_criteria(
     rows: list[tuple[Submission, Task, Student]],
-) -> dict:
+) -> dict[str, Any]:
     alias_groups = [
         (
             "proyeksiya",
@@ -379,10 +481,325 @@ def _build_criteria(
     }
 
 
+def _criterion_label(row: dict[str, Any]) -> str | None:
+    raw = row.get("criterion") or row.get("Kriteriy") or row.get("name")
+
+    if not raw:
+        return None
+
+    return str(raw).strip()
+
+
+def _criterion_normalized_percent(row: dict[str, Any]) -> float | None:
+    score = _safe_score(row.get("score") or row.get("Ball"))
+
+    try:
+        max_score = float(row.get("max_score") or row.get("Maksimal") or 0)
+    except (TypeError, ValueError):
+        max_score = 0
+
+    if score is None or max_score <= 0:
+        return None
+
+    return max(0.0, min(100.0, score / max_score * 100))
+
+
+def _build_rubric_profiles(
+    rows: list[tuple[Submission, Task, Student]],
+) -> list[dict[str, Any]]:
+    profiles: list[dict[str, Any]] = []
+
+    for mode_key, mode_label in [
+        ("etalon", "Etalon"),
+        ("optional", "Ixtiyoriy"),
+    ]:
+        values_by_label: dict[str, list[float]] = defaultdict(list)
+
+        for submission, task, _ in rows:
+            if _canonical_mode(task.mode) != mode_key:
+                continue
+
+            for row in submission.table_json or []:
+                if not isinstance(row, dict):
+                    continue
+
+                label = _criterion_label(row)
+                value = _criterion_normalized_percent(row)
+
+                if label and value is not None:
+                    values_by_label[label].append(value)
+
+        labels = list(values_by_label.keys())
+        values = [_average(values_by_label[label]) for label in labels]
+
+        profiles.append({
+            "mode": mode_key,
+            "label": mode_label,
+            "labels": labels,
+            "values": values,
+        })
+
+    return profiles
+
+
+def _paired_pre_post_rows(
+    rows: list[tuple[Submission, Task, Student]],
+) -> list[dict[str, Any]]:
+    pretest = _stage_student_average_map(rows, "pretest")
+    posttest = _stage_student_average_map(rows, "posttest")
+
+    students_by_id = {student.id: student for _, _, student in rows}
+    paired: list[dict[str, Any]] = []
+
+    for student_id, pre_score in pretest.items():
+        post_score = posttest.get(student_id)
+
+        if post_score is None:
+            continue
+
+        student = students_by_id.get(student_id)
+
+        paired.append({
+            "student_id": student_id,
+            "student": student,
+            "pretest": pre_score,
+            "posttest": post_score,
+            "difference": post_score - pre_score,
+        })
+
+    return paired
+
+
+def _paired_pre_post_statistics(
+    rows: list[tuple[Submission, Task, Student]],
+) -> dict[str, Any]:
+    paired = _paired_pre_post_rows(rows)
+    pre_scores = [row["pretest"] for row in paired]
+    post_scores = [row["posttest"] for row in paired]
+    differences = [row["difference"] for row in paired]
+
+    mean_pre = _average(pre_scores)
+    mean_post = _average(post_scores)
+    mean_difference = _average(differences)
+    sd_difference = _sample_sd(differences)
+    paired_count = len(paired)
+
+    t_value: float | None = None
+    degrees_of_freedom: int | None = None
+    cohen_dz: float | None = None
+    ci_low: float | None = None
+    ci_high: float | None = None
+
+    if paired_count >= 2 and mean_difference is not None and sd_difference:
+        standard_error = sd_difference / math.sqrt(paired_count)
+        t_value = mean_difference / standard_error if standard_error else None
+        degrees_of_freedom = paired_count - 1
+        cohen_dz = mean_difference / sd_difference
+        ci_low = mean_difference - 1.96 * standard_error
+        ci_high = mean_difference + 1.96 * standard_error
+
+    p_value = _student_t_two_sided_p_value(
+        t_value,
+        float(degrees_of_freedom) if degrees_of_freedom is not None else None,
+    )
+
+    interpretation: str | None = None
+    if mean_difference is not None:
+        if mean_difference > 0:
+            interpretation = "Yakuniy natija boshlang‘ich natijadan yuqori."
+        elif mean_difference < 0:
+            interpretation = "Yakuniy natija boshlang‘ich natijadan past."
+        else:
+            interpretation = "Boshlang‘ich va yakuniy natijalar teng."
+
+    return {
+        "paired_count": paired_count,
+        "pretest": _descriptive_stats(pre_scores),
+        "posttest": _descriptive_stats(post_scores),
+        "difference": _descriptive_stats(differences),
+        "mean_difference": mean_difference,
+        "percent_growth": _percent_growth(mean_pre, mean_post),
+        "cohen_dz": _round(cohen_dz),
+        "confidence_interval_95_low": _round(ci_low),
+        "confidence_interval_95_high": _round(ci_high),
+        "t_value": _round(t_value),
+        "degrees_of_freedom": degrees_of_freedom,
+        "p_value": p_value,
+        "interpretation": interpretation,
+    }
+
+
+def _group_statistics(
+    rows: list[tuple[Submission, Task, Student]],
+    filtered_students: list[Student],
+) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+
+    for key, label in [
+        ("experimental", "Tajriba guruhi"),
+        ("control", "Nazorat guruhi"),
+    ]:
+        group_rows = [row for row in rows if row[2].experiment_group == key]
+        paired = _paired_pre_post_rows(group_rows)
+        pre_scores = [row["pretest"] for row in paired]
+        post_scores = [row["posttest"] for row in paired]
+        mean_pre = _average(pre_scores)
+        mean_post = _average(post_scores)
+        mean_growth = (
+            _round(mean_post - mean_pre)
+            if mean_pre is not None and mean_post is not None
+            else None
+        )
+
+        result.append({
+            "group": key,
+            "label": label,
+            "student_count": len([
+                student
+                for student in filtered_students
+                if student.experiment_group == key
+            ]),
+            "paired_count": len(paired),
+            "pretest": _descriptive_stats(pre_scores),
+            "posttest": _descriptive_stats(post_scores),
+            "mean_growth": mean_growth,
+            "percent_growth": _percent_growth(mean_pre, mean_post),
+        })
+
+    return result
+
+
+def _between_group_statistics(
+    rows: list[tuple[Submission, Task, Student]],
+) -> dict[str, Any]:
+    growth_by_group: dict[str, list[float]] = {
+        "experimental": [],
+        "control": [],
+    }
+
+    for row in _paired_pre_post_rows(rows):
+        student = row["student"]
+        group = getattr(student, "experiment_group", None)
+
+        if group in growth_by_group:
+            growth_by_group[group].append(float(row["difference"]))
+
+    experimental = growth_by_group["experimental"]
+    control = growth_by_group["control"]
+
+    exp_mean = _average(experimental)
+    control_mean = _average(control)
+    growth_difference = (
+        _round(exp_mean - control_mean)
+        if exp_mean is not None and control_mean is not None
+        else None
+    )
+
+    exp_sd = _sample_sd(experimental)
+    control_sd = _sample_sd(control)
+    cohen_d: float | None = None
+    t_value: float | None = None
+    degrees_of_freedom: float | None = None
+
+    if (
+        len(experimental) >= 2
+        and len(control) >= 2
+        and exp_mean is not None
+        and control_mean is not None
+        and exp_sd is not None
+        and control_sd is not None
+    ):
+        pooled_variance = (
+            ((len(experimental) - 1) * exp_sd**2)
+            + ((len(control) - 1) * control_sd**2)
+        ) / (len(experimental) + len(control) - 2)
+
+        pooled_sd = math.sqrt(pooled_variance) if pooled_variance > 0 else 0
+        if pooled_sd:
+            cohen_d = (exp_mean - control_mean) / pooled_sd
+
+        standard_error_sq = (exp_sd**2 / len(experimental)) + (
+            control_sd**2 / len(control)
+        )
+
+        if standard_error_sq > 0:
+            t_value = (exp_mean - control_mean) / math.sqrt(standard_error_sq)
+            numerator = standard_error_sq**2
+            denominator = (
+                (exp_sd**2 / len(experimental)) ** 2 / (len(experimental) - 1)
+            ) + ((control_sd**2 / len(control)) ** 2 / (len(control) - 1))
+            degrees_of_freedom = numerator / denominator if denominator else None
+
+    p_value = _student_t_two_sided_p_value(t_value, degrees_of_freedom)
+
+    interpretation: str | None = None
+    if growth_difference is not None:
+        if growth_difference > 0:
+            interpretation = "Tajriba guruhi o‘sishi nazorat guruhidan yuqori."
+        elif growth_difference < 0:
+            interpretation = "Nazorat guruhi o‘sishi tajriba guruhidan yuqori."
+        else:
+            interpretation = "Tajriba va nazorat guruhlari o‘sishi teng."
+
+    return {
+        "experimental_count": len(experimental),
+        "control_count": len(control),
+        "experimental_growth": exp_mean,
+        "control_growth": control_mean,
+        "growth_difference": growth_difference,
+        "cohen_d": _round(cohen_d),
+        "t_value": _round(t_value),
+        "degrees_of_freedom": _round(degrees_of_freedom),
+        "p_value": p_value,
+        "interpretation": interpretation,
+    }
+
+
+def _build_export_rows(
+    rows: list[tuple[Submission, Task, Student]],
+    filtered_students: list[Student],
+) -> list[dict[str, Any]]:
+    averages = _student_average_map(rows)
+    pretest = _stage_student_average_map(rows, "pretest")
+    posttest = _stage_student_average_map(rows, "posttest")
+    weeks = {
+        week_number: _week_student_average_map(rows, week_number)
+        for week_number in [1, 2, 3, 4]
+    }
+
+    result: list[dict[str, Any]] = []
+
+    for student in filtered_students:
+        average = averages.get(student.id)
+        growth = (
+            _round(posttest[student.id] - pretest[student.id])
+            if student.id in pretest and student.id in posttest
+            else None
+        )
+
+        result.append({
+            "student_id": student.id,
+            "name": student.full_name,
+            "group_name": student.group_name,
+            "experiment_group": student.experiment_group,
+            "pretest": pretest.get(student.id),
+            "week_1": weeks[1].get(student.id),
+            "week_2": weeks[2].get(student.id),
+            "week_3": weeks[3].get(student.id),
+            "week_4": weeks[4].get(student.id),
+            "posttest": posttest.get(student.id),
+            "average": average,
+            "growth": growth,
+            "success": average >= PASSING_SCORE if average is not None else None,
+        })
+
+    return result
+
+
 def _build_filter_options(
     db: Session,
     teacher: Teacher,
-) -> dict:
+) -> dict[str, Any]:
     students = cast(
         list[Student],
         db.query(Student)
@@ -462,7 +879,7 @@ def get_teacher_analytics(
     week_number: int | None = None,
     assessment_stage: str | None = None,
     academic_period: str | None = None,
-) -> dict:
+) -> dict[str, Any]:
     student_query = db.query(Student).filter(
         Student.teacher_id == teacher.id
     )
@@ -570,7 +987,7 @@ def get_teacher_analytics(
     growth: float | None = None
 
     if initial_average is not None and final_average is not None:
-        growth = round(final_average - initial_average, 2)
+        growth = _round(final_average - initial_average)
 
     student_average_map = _student_average_map(
         latest_task_rows
@@ -586,9 +1003,8 @@ def get_teacher_analytics(
             for score in student_average_map.values()
         )
 
-        success_rate = round(
+        success_rate = _round(
             passed_count / evaluated_student_count * 100,
-            2,
         )
 
     progress_values = [
@@ -773,6 +1189,20 @@ def get_teacher_analytics(
         "mode_comparison": mode_comparison,
         "criteria": _build_criteria(latest_task_rows),
         "heatmap": heatmap,
+        "descriptive_statistics": _descriptive_stats(
+            list(student_average_map.values())
+        ),
+        "pre_post_statistics": _paired_pre_post_statistics(latest_task_rows),
+        "group_statistics": _group_statistics(
+            latest_task_rows,
+            filtered_students,
+        ),
+        "between_group_statistics": _between_group_statistics(latest_task_rows),
+        "rubric_profiles": _build_rubric_profiles(latest_task_rows),
+        "export_rows": _build_export_rows(
+            latest_task_rows,
+            filtered_students,
+        ),
         "filters": _build_filter_options(
             db=db,
             teacher=teacher,
