@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.llm.contracts import LLMProviderError, StructuredLLMResult, PlanGenerationOutput
-from app.llm.factory import get_ai_mentor_provider
+from app.llm.factory import get_ai_mentor_plan_provider
 from app.models.ai_mentor import (
     AIMentorDiagnosticSession,
     AIMentorPlan,
@@ -429,48 +429,20 @@ def create_generated_plan(
     diagnostic_session_id: int | None = None,
     start_date_value: date | None = None,
 ) -> AIMentorPlanDetailResponse:
-    """Sozlangan LLM provider orqali reja yaratadi, zarur bo‘lsa mock'ka qaytadi."""
+    """4 haftalik rejani faqat Groq orqali yaratadi; fallback yo'q."""
 
-    if settings.LLM_PROVIDER.strip().casefold() == "mock":
-        return create_mock_plan(
-            db,
-            student,
-            diagnostic_session_id=diagnostic_session_id,
-            start_date_value=start_date_value,
-        )
-
-    session = _resolve_completed_diagnostic_session(
-        db,
-        student,
-        diagnostic_session_id,
-    )
+    session = _resolve_completed_diagnostic_session(db, student, diagnostic_session_id)
     plan_start_date = start_date_value or date.today()
-
     try:
-        provider = get_ai_mentor_provider()
-        if provider is None:
-            return create_mock_plan(
-                db,
-                student,
-                diagnostic_session_id=session.id,
-                start_date_value=plan_start_date,
-            )
+        provider = get_ai_mentor_plan_provider()
         result = provider.generate_plan(_llm_plan_context(student, session))
         payload = _plan_payload_from_llm(result, session, plan_start_date)
     except LLMProviderError as exc:
-        logger.warning("Plan LLM fallback: %s", exc.code)
-        if not settings.LLM_FALLBACK_TO_MOCK:
-            raise http_error(
-                status.HTTP_503_SERVICE_UNAVAILABLE,
-                "AI Mentor LLM xizmati vaqtincha reja yarata olmadi.",
-            ) from exc
-
-        payload = _build_mock_plan_payload(session, plan_start_date)
-        payload.generation_metadata = {
-            **(payload.generation_metadata or {}),
-            "fallback_from_provider": settings.LLM_PROVIDER,
-            "fallback_reason": exc.code,
-        }
+        logger.warning("Groq plan generation failed: %s", exc.code)
+        raise http_error(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "AI Mentor Groq xizmati vaqtincha reja yarata olmadi.",
+        ) from exc
 
     plan = create_plan_from_payload(db, student, payload)
     return build_plan_detail_response(db, plan)

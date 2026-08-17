@@ -5,6 +5,7 @@ import os
 import sys
 import types
 import unittest
+from unittest.mock import patch
 
 os.environ.setdefault("DATABASE_URL", "sqlite+pysqlite:///:memory:")
 os.environ.setdefault("SECRET_KEY", "test-secret-key")
@@ -82,8 +83,10 @@ class AIMentorAPITestCase(unittest.TestCase):
     def setUp(self) -> None:
         self.original_llm_provider = settings.LLM_PROVIDER
         self.original_llm_fallback = settings.LLM_FALLBACK_TO_MOCK
+        self.original_chat_primary = settings.AI_MENTOR_CHAT_PRIMARY_PROVIDER
         settings.LLM_PROVIDER = "mock"
         settings.LLM_FALLBACK_TO_MOCK = True
+        settings.AI_MENTOR_CHAT_PRIMARY_PROVIDER = "mock"
 
         self.engine = create_engine(
             "sqlite+pysqlite:///:memory:",
@@ -109,6 +112,7 @@ class AIMentorAPITestCase(unittest.TestCase):
             login="api_student",
             password_hash="hash",
             is_active=True,
+            experiment_group="experimental",
         )
         self.db.add(self.student)
         self.db.commit()
@@ -124,11 +128,22 @@ class AIMentorAPITestCase(unittest.TestCase):
         app.dependency_overrides[get_db] = override_get_db
         app.dependency_overrides[get_current_student] = lambda: self.student
         self.app = app
+        self.plan_patcher = patch(
+            "app.api.v1.endpoints.ai_mentor.create_generated_plan",
+            side_effect=lambda db, student, diagnostic_session_id=None, start_date_value=None: __import__(
+                "app.services.ai_mentor_plan_service", fromlist=["create_mock_plan"]
+            ).create_mock_plan(
+                db, student, diagnostic_session_id=diagnostic_session_id, start_date_value=start_date_value
+            ),
+        )
+        self.plan_patcher.start()
         self.client = TestClient(app)
 
     def tearDown(self) -> None:
         settings.LLM_PROVIDER = self.original_llm_provider
         settings.LLM_FALLBACK_TO_MOCK = self.original_llm_fallback
+        settings.AI_MENTOR_CHAT_PRIMARY_PROVIDER = self.original_chat_primary
+        self.plan_patcher.stop()
         self.client.close()
         self.db.close()
         self.engine.dispose()
@@ -329,7 +344,7 @@ class AIMentorAPITestCase(unittest.TestCase):
             json=self._answer_payload(questions),
         )
         plan_id = self.client.post(
-            "/ai-mentor/plans/mock",
+            "/ai-mentor/plans/generate",
             json={"diagnostic_session_id": session_id},
         ).json()["plan"]["id"]
 
@@ -339,6 +354,7 @@ class AIMentorAPITestCase(unittest.TestCase):
             login="other_api_student",
             password_hash="hash",
             is_active=True,
+            experiment_group="experimental",
         )
         self.db.add(other_student)
         self.db.commit()
@@ -347,6 +363,23 @@ class AIMentorAPITestCase(unittest.TestCase):
 
         response = self.client.get(f"/ai-mentor/plans/{plan_id}")
         self.assertEqual(response.status_code, 404)
+
+    def test_control_and_unassigned_students_cannot_access_ai_mentor(self) -> None:
+        self.student.experiment_group = "control"
+        self.db.commit()
+        response = self.client.get("/ai-mentor/diagnostic/questions")
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.json()["detail"], "AI Mentor faqat tajriba guruhi talabalari uchun mavjud.")
+
+        self.student.experiment_group = None
+        self.db.commit()
+        response = self.client.get("/ai-mentor/diagnostic/questions")
+        self.assertEqual(response.status_code, 403)
+
+        self.student.experiment_group = "experimental"
+        self.db.commit()
+        response = self.client.get("/ai-mentor/diagnostic/questions")
+        self.assertEqual(response.status_code, 200)
 
 
 if __name__ == "__main__":

@@ -25,7 +25,7 @@ from app.llm.contracts import (
     StructuredLLMResult,
     TextLLMResult,
 )
-from app.models.ai_mentor import AIMentorDiagnosticQuestion
+from app.models.ai_mentor import AIMentorDiagnosticQuestion, AIMentorLLMUsage, AIMentorPlan
 from app.models.student import Student
 from app.models.teacher import Teacher
 from app.schemas.ai_mentor import (
@@ -154,15 +154,42 @@ class FailingStreamingLLMProvider(FakeLLMProvider):
     def chat_reply_stream(self, context):
         del context
         yield "Boshlang‘ich partial javob"
-        raise LLMProviderError("provider_request_failed", "stream failure")
+        raise LLMProviderError("rate_limit", "stream rate limit")
+
+
+class FakeGeminiProvider(FakeLLMProvider):
+    provider_name = "gemini"
+    model_name = "gemini-test"
+
+    @staticmethod
+    def _metadata(total_tokens: int) -> LLMCallMetadata:
+        return LLMCallMetadata(
+            provider="gemini", model="gemini-test", input_tokens=40,
+            output_tokens=20, total_tokens=total_tokens, request_id="gemini-request-id"
+        )
+
+
+class FailingPlanProvider(FakeLLMProvider):
+    provider_name = "groq"
+    model_name = "openai/gpt-oss-120b"
+
+    def generate_plan(self, context):
+        del context
+        raise LLMProviderError("rate_limit", "Groq rate limited")
 
 class AIMentorLLMTestCase(unittest.TestCase):
     def setUp(self) -> None:
         self.original_provider = settings.LLM_PROVIDER
         self.original_fallback = settings.LLM_FALLBACK_TO_MOCK
         self.original_rag_chat_enabled = settings.RAG_CHAT_ENABLED
+        self.original_chat_primary = settings.AI_MENTOR_CHAT_PRIMARY_PROVIDER
+        self.original_chat_fallback = settings.AI_MENTOR_CHAT_FALLBACK_PROVIDER
+        self.original_chat_limit = settings.AI_MENTOR_GROQ_CHAT_DAILY_LIMIT
         settings.LLM_PROVIDER = "openai"
         settings.LLM_FALLBACK_TO_MOCK = False
+        settings.AI_MENTOR_CHAT_PRIMARY_PROVIDER = "openai"
+        settings.AI_MENTOR_CHAT_FALLBACK_PROVIDER = "gemini"
+        settings.AI_MENTOR_GROQ_CHAT_DAILY_LIMIT = 20
         settings.RAG_CHAT_ENABLED = True
 
         self.engine = create_engine(
@@ -198,6 +225,9 @@ class AIMentorLLMTestCase(unittest.TestCase):
         settings.LLM_PROVIDER = self.original_provider
         settings.LLM_FALLBACK_TO_MOCK = self.original_fallback
         settings.RAG_CHAT_ENABLED = self.original_rag_chat_enabled
+        settings.AI_MENTOR_CHAT_PRIMARY_PROVIDER = self.original_chat_primary
+        settings.AI_MENTOR_CHAT_FALLBACK_PROVIDER = self.original_chat_fallback
+        settings.AI_MENTOR_GROQ_CHAT_DAILY_LIMIT = self.original_chat_limit
         self.db.close()
         self.engine.dispose()
 
@@ -271,7 +301,7 @@ class AIMentorLLMTestCase(unittest.TestCase):
         )
 
         with patch(
-            "app.services.ai_mentor_plan_service.get_ai_mentor_provider",
+            "app.services.ai_mentor_plan_service.get_ai_mentor_plan_provider",
             return_value=provider,
         ):
             plan_response = create_generated_plan(
@@ -295,7 +325,7 @@ class AIMentorLLMTestCase(unittest.TestCase):
             AIMentorChatSessionCreate(plan_id=plan_response.plan.id),
         )
         with patch(
-            "app.services.ai_mentor_chat_service.get_ai_mentor_provider",
+            "app.services.ai_mentor_chat_service.get_ai_mentor_chat_primary_provider",
             return_value=provider,
         ):
             response = send_chat_message(
@@ -357,7 +387,7 @@ class AIMentorLLMTestCase(unittest.TestCase):
                 return_value=fake_search,
             ),
             patch(
-                "app.services.ai_mentor_chat_service.get_ai_mentor_provider",
+                "app.services.ai_mentor_chat_service.get_ai_mentor_chat_primary_provider",
                 return_value=provider,
             ),
         ):
@@ -383,27 +413,24 @@ class AIMentorLLMTestCase(unittest.TestCase):
         self.assertNotIn("content", rag_metadata["sources"][0])
         self.assertIn("excerpt", rag_metadata["sources"][0])
 
-    def test_streaming_chat_replaces_partial_with_mock_on_provider_failure(self) -> None:
-        settings.LLM_PROVIDER = "groq"
-        settings.LLM_FALLBACK_TO_MOCK = True
-        chat_session = create_chat_session(
-            self.db,
-            self.student,
-            AIMentorChatSessionCreate(),
-        )
+    def test_streaming_chat_replaces_partial_with_gemini_on_groq_rate_limit(self) -> None:
+        settings.AI_MENTOR_CHAT_PRIMARY_PROVIDER = "groq"
+        settings.AI_MENTOR_CHAT_FALLBACK_PROVIDER = "gemini"
+        chat_session = create_chat_session(self.db, self.student, AIMentorChatSessionCreate())
 
-        with patch(
-            "app.services.ai_mentor_chat_service.get_ai_mentor_provider",
-            return_value=FailingStreamingLLMProvider(),
+        with (
+            patch(
+                "app.services.ai_mentor_chat_service.get_ai_mentor_chat_primary_provider",
+                return_value=FailingStreamingLLMProvider(),
+            ),
+            patch(
+                "app.services.ai_mentor_chat_service.get_ai_mentor_chat_fallback_provider",
+                return_value=FakeGeminiProvider(),
+            ),
         ):
-            events = list(
-                stream_chat_message(
-                    self.db,
-                    self.student,
-                    chat_session.id,
-                    "Vaqtni rejalashtirishga yordam bering",
-                )
-            )
+            events = list(stream_chat_message(
+                self.db, self.student, chat_session.id, "Vaqtni rejalashtirishga yordam bering"
+            ))
 
         stream_text = "".join(events)
         self.assertIn("event: fallback", stream_text)
@@ -411,16 +438,64 @@ class AIMentorLLMTestCase(unittest.TestCase):
         self.assertIn("event: done", stream_text)
 
         from app.services.ai_mentor_chat_service import build_chat_session_detail
-
         detail = build_chat_session_detail(self.db, chat_session)
-        self.assertEqual(len(detail.messages), 2)
         assistant = detail.messages[-1]
-        self.assertEqual(assistant.model_name, "mock-ai-mentor-v1")
-        self.assertEqual(assistant.metadata_json["provider"], "mock")
+        self.assertEqual(assistant.model_name, "gemini-test")
+        self.assertEqual(assistant.metadata_json["provider"], "gemini")
+        self.assertEqual(assistant.metadata_json["fallback_from_provider"], "groq")
+        self.assertEqual(assistant.metadata_json["fallback_reason"], "rate_limit")
+
+    def test_groq_daily_quota_skips_primary_and_uses_fallback(self) -> None:
+        settings.AI_MENTOR_CHAT_PRIMARY_PROVIDER = "groq"
+        settings.AI_MENTOR_CHAT_FALLBACK_PROVIDER = "gemini"
+        settings.AI_MENTOR_GROQ_CHAT_DAILY_LIMIT = 1
+        chat_session = create_chat_session(self.db, self.student, AIMentorChatSessionCreate())
+        self.db.add(AIMentorLLMUsage(
+            student_id=self.student.id, chat_session_id=chat_session.id, feature="chat",
+            provider="groq", model_name="openai/gpt-oss-120b", status="success"
+        ))
+        self.db.commit()
+
+        with (
+            patch("app.services.ai_mentor_chat_service.get_ai_mentor_chat_primary_provider") as primary_mock,
+            patch(
+                "app.services.ai_mentor_chat_service.get_ai_mentor_chat_fallback_provider",
+                return_value=FakeGeminiProvider(),
+            ),
+        ):
+            response = send_chat_message(self.db, self.student, chat_session.id, "Keyingi vazifa nima?")
+
+        primary_mock.assert_not_called()
+        self.assertEqual(response.assistant_message.metadata_json["provider"], "gemini")
         self.assertEqual(
-            assistant.metadata_json["fallback_from_provider"],
-            "groq",
+            response.assistant_message.metadata_json["fallback_reason"],
+            "student_groq_quota_exhausted",
         )
+        skipped = self.db.query(AIMentorLLMUsage).filter(
+            AIMentorLLMUsage.student_id == self.student.id,
+            AIMentorLLMUsage.status == "skipped_quota",
+        ).one()
+        self.assertEqual(skipped.provider, "groq")
+
+    def test_generated_plan_never_falls_back_when_groq_fails(self) -> None:
+        seed_diagnostic_questions(self.db)
+        diagnostic_session = start_diagnostic_session(self.db, self.student)
+        with patch(
+            "app.services.ai_mentor_diagnostic_service.get_ai_mentor_provider",
+            return_value=FakeLLMProvider(),
+        ):
+            diagnostic = submit_diagnostic_answers(
+                self.db, self.student, diagnostic_session.id, self._answer_payload()
+            )
+
+        with patch(
+            "app.services.ai_mentor_plan_service.get_ai_mentor_plan_provider",
+            return_value=FailingPlanProvider(),
+        ):
+            with self.assertRaises(Exception) as raised:
+                create_generated_plan(self.db, self.student, diagnostic_session_id=diagnostic.id)
+        self.assertEqual(getattr(raised.exception, "status_code", None), 503)
+        self.assertEqual(self.db.query(AIMentorPlan).count(), 0)
 
     def test_diagnostic_falls_back_to_mock(self) -> None:
         settings.LLM_FALLBACK_TO_MOCK = True

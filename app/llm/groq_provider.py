@@ -23,6 +23,7 @@ from app.llm.contracts import (
     StructuredLLMResult,
     TextLLMResult,
 )
+from app.llm.error_utils import normalize_provider_error
 from app.llm.prompts import (
     CHAT_SYSTEM_PROMPT,
     DIAGNOSTIC_SYSTEM_PROMPT,
@@ -198,6 +199,9 @@ class GroqAIMentorProvider(AIMentorLLMProvider):
                     ),
                 )
             except Exception as exc:
+                normalized = normalize_provider_error(exc, "Groq")
+                if normalized.code in {"rate_limit", "authentication_error", "timeout", "provider_unavailable"}:
+                    raise normalized from exc
                 last_error = exc
                 logger.warning(
                     "Groq JSON object fallback attempt %s failed: %s: %s",
@@ -206,10 +210,9 @@ class GroqAIMentorProvider(AIMentorLLMProvider):
                     exc,
                 )
 
-        raise LLMProviderError(
-            "provider_request_failed",
-            "Groq strukturalangan javobni yaratolmadi.",
-        ) from last_error
+        if last_error is not None:
+            raise normalize_provider_error(last_error, "Groq") from last_error
+        raise LLMProviderError("provider_request_failed", "Groq strukturalangan javobni yaratolmadi.")
 
     def _structured_response(
         self,
@@ -262,6 +265,9 @@ class GroqAIMentorProvider(AIMentorLLMProvider):
                 ),
             )
         except Exception as exc:
+            normalized = normalize_provider_error(exc, "Groq")
+            if normalized.code in {"rate_limit", "authentication_error", "timeout", "provider_unavailable"}:
+                raise normalized from exc
             # Groq strict Structured Outputs ba'zan 400/json_validate_failed qaytarishi
             # mumkin. Mock'ka tushishdan oldin haqiqiy Groq JSON Object Mode bilan
             # qayta urinib ko‘ramiz.
@@ -342,10 +348,7 @@ class GroqAIMentorProvider(AIMentorLLMProvider):
         except LLMProviderError:
             raise
         except Exception as exc:
-            raise LLMProviderError(
-                "provider_request_failed",
-                "Groq xizmatiga so‘rov yuborishda xatolik yuz berdi.",
-            ) from exc
+            raise normalize_provider_error(exc, "Groq") from exc
 
     def chat_reply_stream(
         self,
@@ -427,7 +430,4 @@ class GroqAIMentorProvider(AIMentorLLMProvider):
         except LLMProviderError:
             raise
         except Exception as exc:
-            raise LLMProviderError(
-                "provider_request_failed",
-                "Groq streaming xizmatiga so‘rov yuborishda xatolik yuz berdi.",
-            ) from exc
+            raise normalize_provider_error(exc, "Groq") from exc

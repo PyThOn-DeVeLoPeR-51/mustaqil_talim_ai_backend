@@ -35,6 +35,24 @@ class Settings(BaseSettings):
     GROQ_MODEL: str = "openai/gpt-oss-120b"
     GROQ_REASONING_EFFORT: str = "medium"
 
+    # AI Mentor feature-specific routing. 4 haftalik reja doim Groq bilan
+    # yaratiladi; chat esa Groq primary va Gemini/OpenRouter fallback ishlatadi.
+    AI_MENTOR_CHAT_PRIMARY_PROVIDER: str = "groq"
+    AI_MENTOR_CHAT_FALLBACK_PROVIDER: str = "gemini"
+    # <= 0 bo'lsa Groq chat limiti cheklanmaydi. Hisob UTC kun bo'yicha yuritiladi.
+    AI_MENTOR_GROQ_CHAT_DAILY_LIMIT: int = 20
+
+    GEMINI_API_KEY: str | None = None
+    GEMINI_MODEL: str = "gemini-3.5-flash"
+    GEMINI_BASE_URL: str = "https://generativelanguage.googleapis.com/v1beta/openai/"
+
+    OPENROUTER_API_KEY: str | None = None
+    # OpenRouter'da modelni deploy vaqtida aniq belgilang.
+    OPENROUTER_MODEL: str = ""
+    OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
+    OPENROUTER_SITE_URL: str | None = None
+    OPENROUTER_APP_NAME: str = "Mustaqil Talim AI Platforma"
+
     # RAG document ingestion sozlamalari. Fayllar /uploads dan tashqarida
     # saqlanadi, shuning uchun public StaticFiles orqali ochilmaydi.
     RAG_STORAGE_DIR: str = "app/rag_storage"

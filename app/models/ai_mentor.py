@@ -487,3 +487,33 @@ class AIMentorChatMessage(Base):
             name="ck_ai_chat_message_tokens",
         ),
     )
+
+
+class AIMentorLLMUsage(Base):
+    """Per-student AI Mentor provider urinishlari va quota auditi."""
+
+    __tablename__ = "ai_mentor_llm_usage"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    student_id: Mapped[int] = mapped_column(ForeignKey("students.id", ondelete="CASCADE"), index=True, nullable=False)
+    chat_session_id: Mapped[int | None] = mapped_column(ForeignKey("ai_mentor_chat_sessions.id", ondelete="SET NULL"), index=True, nullable=True)
+    feature: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
+    provider: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    model_name: Mapped[str | None] = mapped_column(String(150), nullable=True)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
+    input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    total_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    request_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
+    fallback_from_provider: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+
+    __table_args__ = (
+        CheckConstraint("feature IN ('chat', 'plan', 'diagnostic')", name="ck_ai_llm_usage_feature"),
+        CheckConstraint("status IN ('success', 'error', 'rate_limited', 'skipped_quota')", name="ck_ai_llm_usage_status"),
+        CheckConstraint("input_tokens IS NULL OR input_tokens >= 0", name="ck_ai_llm_usage_input_tokens"),
+        CheckConstraint("output_tokens IS NULL OR output_tokens >= 0", name="ck_ai_llm_usage_output_tokens"),
+        CheckConstraint("total_tokens IS NULL OR total_tokens >= 0", name="ck_ai_llm_usage_total_tokens"),
+    )

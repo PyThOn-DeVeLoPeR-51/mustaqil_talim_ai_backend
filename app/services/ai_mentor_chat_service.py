@@ -12,7 +12,10 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.llm.contracts import LLMCallMetadata, LLMProviderError
-from app.llm.factory import get_ai_mentor_provider
+from app.llm.factory import (
+    get_ai_mentor_chat_fallback_provider,
+    get_ai_mentor_chat_primary_provider,
+)
 from app.models.ai_mentor import (
     AIMentorChatMessage,
     AIMentorChatSession,
@@ -36,6 +39,10 @@ from app.services.ai_mentor_plan_service import (
     calculate_plan_progress,
     get_active_or_latest_plan,
     get_student_plan_or_404,
+)
+from app.services.ai_mentor_usage_service import (
+    record_llm_usage,
+    student_has_groq_chat_quota,
 )
 from app.services.rag_embedding_service import (
     semantic_search_student_documents,
@@ -329,7 +336,7 @@ def _rag_chat_context(
 
     if not settings.RAG_CHAT_ENABLED:
         return {"enabled": False, "status": "disabled", "sources": []}
-    if settings.LLM_PROVIDER.strip().casefold() == "mock":
+    if settings.AI_MENTOR_CHAT_PRIMARY_PROVIDER.strip().casefold() == "mock":
         return {"enabled": True, "status": "llm_mock", "sources": []}
 
     try:
@@ -596,6 +603,89 @@ def _consume_provider_stream(
     return result.metadata
 
 
+def _usage_status_for_error(error_code: str) -> str:
+    return "rate_limited" if error_code == "rate_limit" else "error"
+
+
+def _provider_attempt_entry(
+    provider: str,
+    status_value: str,
+    *,
+    model: str | None = None,
+    error_code: str | None = None,
+) -> dict[str, Any]:
+    data: dict[str, Any] = {"provider": provider, "status": status_value}
+    if model:
+        data["model"] = model
+    if error_code:
+        data["error_code"] = error_code
+    return data
+
+
+def _fallback_unavailable_error() -> Exception:
+    return http_error(
+        status.HTTP_503_SERVICE_UNAVAILABLE,
+        "AI Mentor fallback LLM xizmati sozlanmagan yoki vaqtincha mavjud emas.",
+    )
+
+
+def _get_chat_fallback_provider_or_raise() -> Any:
+    try:
+        provider = get_ai_mentor_chat_fallback_provider()
+    except LLMProviderError as exc:
+        raise _fallback_unavailable_error() from exc
+    if provider is None:
+        raise _fallback_unavailable_error()
+    return provider
+
+
+def _record_success_usage(
+    db: Session,
+    student: Student,
+    chat_session: AIMentorChatSession,
+    metadata: LLMCallMetadata,
+    *,
+    fallback_from_provider: str | None = None,
+) -> None:
+    record_llm_usage(
+        db,
+        student_id=student.id,
+        chat_session_id=chat_session.id,
+        feature="chat",
+        provider=metadata.provider,
+        model_name=metadata.model,
+        status="success",
+        input_tokens=metadata.input_tokens,
+        output_tokens=metadata.output_tokens,
+        total_tokens=metadata.total_tokens,
+        request_id=metadata.request_id,
+        fallback_from_provider=fallback_from_provider,
+    )
+
+
+def _record_error_usage(
+    db: Session,
+    student: Student,
+    chat_session: AIMentorChatSession,
+    *,
+    provider: str,
+    model_name: str | None,
+    error_code: str,
+    fallback_from_provider: str | None = None,
+) -> None:
+    record_llm_usage(
+        db,
+        student_id=student.id,
+        chat_session_id=chat_session.id,
+        feature="chat",
+        provider=provider,
+        model_name=model_name,
+        status=_usage_status_for_error(error_code),
+        error_code=error_code,
+        fallback_from_provider=fallback_from_provider,
+    )
+
+
 def stream_chat_message(
     db: Session,
     student: Student,
@@ -632,20 +722,15 @@ def _stream_chat_message_events(
     context: dict[str, Any],
     user_message: AIMentorChatMessage,
 ) -> Iterator[str]:
-    """ChatGPT-uslubidagi SSE eventlarini yaratadi va yakunda DBga saqlaydi.
+    """SSE chat: Groq primary, faqat quota/429 holatida secondary fallback."""
 
-    Event kontrakti:
-    - ``start``: user xabari saqlandi, provider haqida boshlang‘ich ma'lumot.
-    - ``delta``: assistant matnining navbatdagi bo‘lagi.
-    - ``fallback``: provider ishlamadi, mock javobga o‘tildi; ``replace=true``
-      bo‘lsa frontend avvalgi partial matnni tozalashi kerak.
-    - ``done``: to‘liq assistant xabari PostgreSQL'ga saqlandi.
-    - ``error``: fallback o‘chirilgan va stream yakunlanmadi.
-    """
-
-    configured_provider = settings.LLM_PROVIDER.strip().casefold()
+    primary_name = settings.AI_MENTOR_CHAT_PRIMARY_PROVIDER.strip().casefold()
+    fallback_name = settings.AI_MENTOR_CHAT_FALLBACK_PROVIDER.strip().casefold()
     assistant_parts: list[str] = []
     assistant_persisted = False
+    provider_attempts: list[dict[str, Any]] = []
+    active_provider: Any | None = None
+    fallback_reason: str | None = None
 
     def persist_partial(reason: str) -> None:
         nonlocal assistant_persisted
@@ -656,55 +741,39 @@ def _stream_chat_message_events(
             db,
             chat_session,
             content=partial,
-            model_name=(
-                getattr(provider, "model_name", None)
-                if provider is not None
-                else "unknown"
-            )
-            or "unknown",
+            model_name=(getattr(active_provider, "model_name", None) or "unknown"),
             token_count=None,
             metadata={
-                "provider": configured_provider,
+                "provider": getattr(active_provider, "provider_name", primary_name or "unknown"),
                 "stream": True,
                 "stream_interrupted": True,
                 "interruption_reason": reason,
+                "provider_attempts": provider_attempts,
                 "rag": _rag_metadata_from_context(context, used_for_answer=True),
             },
         )
         assistant_persisted = True
 
-    provider: Any | None = None
     try:
-        if configured_provider != "mock":
-            provider = get_ai_mentor_provider()
-
-        yield _sse_event(
-            "start",
-            {
-                "session_id": chat_session.id,
-                "user_message": {
-                    "id": user_message.id,
-                    "session_id": user_message.session_id,
-                    "sequence_number": user_message.sequence_number,
-                    "role": user_message.role,
-                    "content": user_message.content,
-                    "created_at": user_message.created_at.isoformat(),
+        # Test/local mock remains possible only when explicitly configured as chat primary.
+        if primary_name == "mock":
+            yield _sse_event(
+                "start",
+                {
+                    "session_id": chat_session.id,
+                    "user_message": {
+                        "id": user_message.id,
+                        "session_id": user_message.session_id,
+                        "sequence_number": user_message.sequence_number,
+                        "role": user_message.role,
+                        "content": user_message.content,
+                        "created_at": user_message.created_at.isoformat(),
+                    },
+                    "provider": "mock",
+                    "model": "mock-ai-mentor-v1",
+                    "rag": _rag_metadata_from_context(context, used_for_answer=False),
                 },
-                "provider": (
-                    getattr(provider, "provider_name", None)
-                    if provider is not None
-                    else "mock"
-                ),
-                "model": (
-                    getattr(provider, "model_name", None)
-                    if provider is not None
-                    else "mock-ai-mentor-v1"
-                ),
-                "rag": _rag_metadata_from_context(context, used_for_answer=False),
-            },
-        )
-
-        if configured_provider == "mock" or provider is None:
+            )
             mock_text = _mock_chat_reply(db, student, content)
             for delta in _text_chunks(mock_text):
                 assistant_parts.append(delta)
@@ -712,13 +781,81 @@ def _stream_chat_message_events(
             metadata = {
                 "provider": "mock",
                 "stream": True,
+                "provider_attempts": [{"provider": "mock", "status": "success"}],
                 "rag": _rag_metadata_from_context(context, used_for_answer=False),
             }
             model_name = "mock-ai-mentor-v1"
             token_count = None
         else:
+            use_fallback_immediately = False
+            if primary_name == "groq" and not student_has_groq_chat_quota(
+                db,
+                student.id,
+                settings.AI_MENTOR_GROQ_CHAT_DAILY_LIMIT,
+            ):
+                use_fallback_immediately = True
+                fallback_reason = "student_groq_quota_exhausted"
+                provider_attempts.append(
+                    _provider_attempt_entry("groq", "skipped_quota", error_code=fallback_reason)
+                )
+                record_llm_usage(
+                    db,
+                    student_id=student.id,
+                    chat_session_id=chat_session.id,
+                    feature="chat",
+                    provider="groq",
+                    model_name=settings.GROQ_MODEL,
+                    status="skipped_quota",
+                    error_code=fallback_reason,
+                )
+                active_provider = _get_chat_fallback_provider_or_raise()
+            else:
+                try:
+                    active_provider = get_ai_mentor_chat_primary_provider()
+                except LLMProviderError as exc:
+                    _record_error_usage(
+                        db,
+                        student,
+                        chat_session,
+                        provider=primary_name or "unknown",
+                        model_name=None,
+                        error_code=exc.code,
+                    )
+                    raise
+                if active_provider is None:
+                    raise LLMProviderError("missing_provider", "AI Mentor chat primary provider sozlanmagan.")
+
+            yield _sse_event(
+                "start",
+                {
+                    "session_id": chat_session.id,
+                    "user_message": {
+                        "id": user_message.id,
+                        "session_id": user_message.session_id,
+                        "sequence_number": user_message.sequence_number,
+                        "role": user_message.role,
+                        "content": user_message.content,
+                        "created_at": user_message.created_at.isoformat(),
+                    },
+                    "provider": getattr(active_provider, "provider_name", "unknown"),
+                    "model": getattr(active_provider, "model_name", "unknown"),
+                    "rag": _rag_metadata_from_context(context, used_for_answer=False),
+                },
+            )
+
+            if use_fallback_immediately:
+                yield _sse_event(
+                    "fallback",
+                    {
+                        "from_provider": "groq",
+                        "to_provider": getattr(active_provider, "provider_name", fallback_name),
+                        "reason": fallback_reason,
+                        "replace": False,
+                    },
+                )
+
             try:
-                stream = _consume_provider_stream(provider, context)
+                stream = _consume_provider_stream(active_provider, context)
                 while True:
                     try:
                         delta = next(stream)
@@ -729,22 +866,39 @@ def _stream_chat_message_events(
                     yield _sse_event("delta", {"delta": delta})
 
                 if not assistant_parts:
-                    raise LLMProviderError(
-                        "empty_text_output",
-                        "AI Mentor streaming javobi bo‘sh qaytdi.",
-                    )
-
-                metadata = llm_metadata.as_dict()
-                metadata["stream"] = True
-                metadata["rag"] = _rag_metadata_from_context(
-                    context,
-                    used_for_answer=True,
+                    raise LLMProviderError("empty_text_output", "AI Mentor streaming javobi bo'sh qaytdi.")
+                _record_success_usage(
+                    db,
+                    student,
+                    chat_session,
+                    llm_metadata,
+                    fallback_from_provider="groq" if use_fallback_immediately else None,
                 )
-                model_name = llm_metadata.model
-                token_count = llm_metadata.total_tokens
+                provider_attempts.append(
+                    _provider_attempt_entry(
+                        llm_metadata.provider,
+                        "success",
+                        model=llm_metadata.model,
+                    )
+                )
             except LLMProviderError as exc:
-                logger.warning("Chat stream LLM fallback: %s", exc.code)
-                if not settings.LLM_FALLBACK_TO_MOCK:
+                failed_name = getattr(active_provider, "provider_name", primary_name or "unknown")
+                failed_model = getattr(active_provider, "model_name", None)
+                _record_error_usage(
+                    db,
+                    student,
+                    chat_session,
+                    provider=failed_name,
+                    model_name=failed_model,
+                    error_code=exc.code,
+                    fallback_from_provider="groq" if use_fallback_immediately else None,
+                )
+                provider_attempts.append(
+                    _provider_attempt_entry(failed_name, _usage_status_for_error(exc.code), model=failed_model, error_code=exc.code)
+                )
+
+                # Fallback providerning o'zi xato bersa yoki Groq 429 bo'lmasa boshqa fallback yo'q.
+                if use_fallback_immediately or primary_name != "groq" or exc.code != "rate_limit":
                     persist_partial(exc.code)
                     yield _sse_event(
                         "error",
@@ -756,41 +910,93 @@ def _stream_chat_message_events(
                     )
                     return
 
-                # Partial LLM delta allaqachon ko‘ringan bo‘lsa frontend uni tozalab,
-                # mock matnni yangidan ko‘rsatishi kerak. DBga faqat yakuniy mock saqlanadi.
-                replace = bool(assistant_parts)
+                fallback_reason = "rate_limit"
+                replace_existing = bool(assistant_parts)
                 assistant_parts.clear()
+                try:
+                    active_provider = _get_chat_fallback_provider_or_raise()
+                except Exception:
+                    yield _sse_event(
+                        "error",
+                        {
+                            "code": "fallback_unavailable",
+                            "message": "AI Mentor fallback LLM xizmati mavjud emas.",
+                            "partial_saved": False,
+                        },
+                    )
+                    return
+
                 yield _sse_event(
                     "fallback",
                     {
-                        "from_provider": configured_provider,
-                        "reason": exc.code,
-                        "replace": replace,
+                        "from_provider": "groq",
+                        "to_provider": getattr(active_provider, "provider_name", fallback_name),
+                        "reason": fallback_reason,
+                        "replace": replace_existing,
                     },
                 )
-                mock_text = _mock_chat_reply(db, student, content)
-                for delta in _text_chunks(mock_text):
-                    assistant_parts.append(delta)
-                    yield _sse_event("delta", {"delta": delta})
-                metadata = {
-                    "provider": "mock",
-                    "stream": True,
-                    "fallback_from_provider": configured_provider,
-                    "fallback_reason": exc.code,
-                    "rag": _rag_metadata_from_context(context, used_for_answer=False),
-                }
-                model_name = "mock-ai-mentor-v1"
-                token_count = None
+
+                try:
+                    fallback_stream = _consume_provider_stream(active_provider, context)
+                    while True:
+                        try:
+                            delta = next(fallback_stream)
+                        except StopIteration as stop:
+                            llm_metadata = stop.value
+                            break
+                        assistant_parts.append(delta)
+                        yield _sse_event("delta", {"delta": delta})
+                    if not assistant_parts:
+                        raise LLMProviderError("empty_text_output", "Fallback streaming javobi bo'sh qaytdi.")
+                    _record_success_usage(db, student, chat_session, llm_metadata, fallback_from_provider="groq")
+                    provider_attempts.append(
+                        _provider_attempt_entry(llm_metadata.provider, "success", model=llm_metadata.model)
+                    )
+                except LLMProviderError as fallback_exc:
+                    fallback_provider_name = getattr(active_provider, "provider_name", fallback_name or "unknown")
+                    fallback_model = getattr(active_provider, "model_name", None)
+                    _record_error_usage(
+                        db,
+                        student,
+                        chat_session,
+                        provider=fallback_provider_name,
+                        model_name=fallback_model,
+                        error_code=fallback_exc.code,
+                        fallback_from_provider="groq",
+                    )
+                    provider_attempts.append(
+                        _provider_attempt_entry(
+                            fallback_provider_name,
+                            _usage_status_for_error(fallback_exc.code),
+                            model=fallback_model,
+                            error_code=fallback_exc.code,
+                        )
+                    )
+                    yield _sse_event(
+                        "error",
+                        {
+                            "code": fallback_exc.code,
+                            "message": "AI Mentor fallback LLM xizmati vaqtincha javob bera olmadi.",
+                            "partial_saved": False,
+                        },
+                    )
+                    return
+
+            metadata = llm_metadata.as_dict()
+            metadata["stream"] = True
+            metadata["rag"] = _rag_metadata_from_context(context, used_for_answer=True)
+            metadata["provider_attempts"] = provider_attempts
+            if fallback_reason:
+                metadata["fallback_from_provider"] = "groq"
+                metadata["fallback_reason"] = fallback_reason
+            model_name = llm_metadata.model
+            token_count = llm_metadata.total_tokens
 
         assistant_content = "".join(assistant_parts).strip()
         if not assistant_content:
             yield _sse_event(
                 "error",
-                {
-                    "code": "empty_text_output",
-                    "message": "AI Mentor bo‘sh javob qaytardi.",
-                    "partial_saved": False,
-                },
+                {"code": "empty_text_output", "message": "AI Mentor bo'sh javob qaytardi.", "partial_saved": False},
             )
             return
 
@@ -803,7 +1009,6 @@ def _stream_chat_message_events(
             metadata=metadata,
         )
         assistant_persisted = True
-
         yield _sse_event(
             "done",
             {
@@ -826,59 +1031,21 @@ def _stream_chat_message_events(
         raise
     except LLMProviderError as exc:
         logger.warning("Chat stream provider initialization failed: %s", exc.code)
-        if settings.LLM_FALLBACK_TO_MOCK:
-            assistant_parts.clear()
-            yield _sse_event(
-                "fallback",
-                {
-                    "from_provider": configured_provider,
-                    "reason": exc.code,
-                    "replace": False,
-                },
-            )
-            mock_text = _mock_chat_reply(db, student, content)
-            for delta in _text_chunks(mock_text):
-                assistant_parts.append(delta)
-                yield _sse_event("delta", {"delta": delta})
-            assistant_message = _persist_stream_assistant_message(
-                db,
-                chat_session,
-                content="".join(assistant_parts).strip(),
-                model_name="mock-ai-mentor-v1",
-                token_count=None,
-                metadata={
-                    "provider": "mock",
-                    "stream": True,
-                    "fallback_from_provider": configured_provider,
-                    "fallback_reason": exc.code,
-                    "rag": _rag_metadata_from_context(context, used_for_answer=False),
-                },
-            )
-            assistant_persisted = True
-            yield _sse_event(
-                "done",
-                {
-                    "session_id": chat_session.id,
-                    "assistant_message": {
-                        "id": assistant_message.id,
-                        "session_id": assistant_message.session_id,
-                        "sequence_number": assistant_message.sequence_number,
-                        "role": assistant_message.role,
-                        "content": assistant_message.content,
-                        "model_name": assistant_message.model_name,
-                        "token_count": assistant_message.token_count,
-                        "metadata_json": assistant_message.metadata_json,
-                        "created_at": assistant_message.created_at.isoformat(),
-                    },
-                },
-            )
-            return
-
         yield _sse_event(
             "error",
             {
                 "code": exc.code,
                 "message": "AI Mentor LLM xizmati vaqtincha javob bera olmadi.",
+                "partial_saved": False,
+            },
+        )
+    except Exception as exc:
+        logger.warning("Chat stream fallback initialization failed: %s: %s", type(exc).__name__, exc)
+        yield _sse_event(
+            "error",
+            {
+                "code": "fallback_unavailable",
+                "message": "AI Mentor fallback LLM xizmati mavjud emas.",
                 "partial_saved": False,
             },
         )
@@ -915,60 +1082,134 @@ def send_chat_message(
     session_id: int,
     content: str,
 ) -> AIMentorChatResponse:
-    """Sozlangan provider orqali chat javobi yaratadi, zarur bo‘lsa mock'ka qaytadi."""
+    """Groq primary; per-student quota yoki Groq 429 bo'lsa secondary fallback."""
 
     chat_session = get_student_chat_session_or_404(db, student, session_id)
     if chat_session.status != "active":
         raise http_error(
             status.HTTP_409_CONFLICT,
-            "Yopilgan yoki arxivlangan chatga xabar yuborib bo‘lmaydi.",
+            "Yopilgan yoki arxivlangan chatga xabar yuborib bo'lmaydi.",
         )
 
-    if settings.LLM_PROVIDER.strip().casefold() == "mock":
+    primary_name = settings.AI_MENTOR_CHAT_PRIMARY_PROVIDER.strip().casefold()
+    if primary_name == "mock":
         return send_mock_chat_message(db, student, session_id, content)
 
-    context: dict[str, Any] | None = None
-    try:
-        provider = get_ai_mentor_provider()
-        if provider is None:
-            return send_mock_chat_message(db, student, session_id, content)
-        context = _llm_chat_context(db, student, chat_session, content)
-        result = provider.chat_reply(context)
-        assistant_content = result.text
-        model_name = result.metadata.model
-        token_count = result.metadata.total_tokens
-        metadata = result.metadata.as_dict()
-        metadata["rag"] = _rag_metadata_from_context(
-            context,
-            used_for_answer=True,
+    context = _llm_chat_context(db, student, chat_session, content)
+    provider_attempts: list[dict[str, Any]] = []
+    fallback_reason: str | None = None
+    fallback_from: str | None = None
+
+    use_fallback = False
+    if primary_name == "groq" and not student_has_groq_chat_quota(
+        db,
+        student.id,
+        settings.AI_MENTOR_GROQ_CHAT_DAILY_LIMIT,
+    ):
+        use_fallback = True
+        fallback_reason = "student_groq_quota_exhausted"
+        fallback_from = "groq"
+        provider_attempts.append(_provider_attempt_entry("groq", "skipped_quota", error_code=fallback_reason))
+        record_llm_usage(
+            db,
+            student_id=student.id,
+            chat_session_id=chat_session.id,
+            feature="chat",
+            provider="groq",
+            model_name=settings.GROQ_MODEL,
+            status="skipped_quota",
+            error_code=fallback_reason,
         )
+        provider = _get_chat_fallback_provider_or_raise()
+    else:
+        try:
+            provider = get_ai_mentor_chat_primary_provider()
+        except LLMProviderError as exc:
+            _record_error_usage(
+                db,
+                student,
+                chat_session,
+                provider=primary_name or "unknown",
+                model_name=None,
+                error_code=exc.code,
+            )
+            raise http_error(status.HTTP_503_SERVICE_UNAVAILABLE, "AI Mentor LLM xizmati vaqtincha javob bera olmadi.") from exc
+        if provider is None:
+            raise http_error(status.HTTP_503_SERVICE_UNAVAILABLE, "AI Mentor chat primary provider sozlanmagan.")
+
+    try:
+        result = provider.chat_reply(context)
     except LLMProviderError as exc:
-        logger.warning("Chat LLM fallback: %s", exc.code)
-        if not settings.LLM_FALLBACK_TO_MOCK:
+        failed_name = getattr(provider, "provider_name", primary_name or "unknown")
+        failed_model = getattr(provider, "model_name", None)
+        _record_error_usage(
+            db,
+            student,
+            chat_session,
+            provider=failed_name,
+            model_name=failed_model,
+            error_code=exc.code,
+            fallback_from_provider=fallback_from,
+        )
+        provider_attempts.append(
+            _provider_attempt_entry(failed_name, _usage_status_for_error(exc.code), model=failed_model, error_code=exc.code)
+        )
+
+        # Quota sabab fallbackga kirgan bo'lsak, secondary xatosidan keyin boshqa provider yo'q.
+        if use_fallback or primary_name != "groq" or exc.code != "rate_limit":
             raise http_error(
                 status.HTTP_503_SERVICE_UNAVAILABLE,
                 "AI Mentor LLM xizmati vaqtincha javob bera olmadi.",
             ) from exc
-        assistant_content = _mock_chat_reply(db, student, content)
-        model_name = "mock-ai-mentor-v1"
-        token_count = None
-        metadata = {
-            "provider": "mock",
-            "fallback_from_provider": settings.LLM_PROVIDER,
-            "fallback_reason": exc.code,
-            "rag": _rag_metadata_from_context(
-                context or {},
-                used_for_answer=False,
-            ),
-        }
+
+        fallback_reason = "rate_limit"
+        fallback_from = "groq"
+        try:
+            provider = _get_chat_fallback_provider_or_raise()
+            result = provider.chat_reply(context)
+        except LLMProviderError as fallback_exc:
+            fallback_provider_name = getattr(provider, "provider_name", settings.AI_MENTOR_CHAT_FALLBACK_PROVIDER)
+            fallback_model = getattr(provider, "model_name", None)
+            _record_error_usage(
+                db,
+                student,
+                chat_session,
+                provider=fallback_provider_name,
+                model_name=fallback_model,
+                error_code=fallback_exc.code,
+                fallback_from_provider="groq",
+            )
+            provider_attempts.append(
+                _provider_attempt_entry(
+                    fallback_provider_name,
+                    _usage_status_for_error(fallback_exc.code),
+                    model=fallback_model,
+                    error_code=fallback_exc.code,
+                )
+            )
+            raise http_error(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "AI Mentor fallback LLM xizmati vaqtincha javob bera olmadi.",
+            ) from fallback_exc
+
+    _record_success_usage(db, student, chat_session, result.metadata, fallback_from_provider=fallback_from)
+    provider_attempts.append(
+        _provider_attempt_entry(result.metadata.provider, "success", model=result.metadata.model)
+    )
+    metadata = result.metadata.as_dict()
+    metadata["rag"] = _rag_metadata_from_context(context, used_for_answer=True)
+    metadata["provider_attempts"] = provider_attempts
+    if fallback_reason:
+        metadata["fallback_from_provider"] = "groq"
+        metadata["fallback_reason"] = fallback_reason
 
     return _persist_chat_exchange(
         db,
         chat_session,
         user_content=content,
-        assistant_content=assistant_content,
-        model_name=model_name,
-        token_count=token_count,
+        assistant_content=result.text,
+        model_name=result.metadata.model,
+        token_count=result.metadata.total_tokens,
         metadata=metadata,
     )
 

@@ -12,6 +12,7 @@ from app.models.ai_mentor import (  # noqa
     AIMentorPlan,
     AIMentorPlanItem,
     AIMentorPlanWeek,
+    AIMentorLLMUsage,
 )
 
 from app.models.rag import RAGChunk, RAGDocument, RAGProcessingJob  # noqa

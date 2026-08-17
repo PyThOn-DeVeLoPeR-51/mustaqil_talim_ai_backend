@@ -19,7 +19,6 @@ from app.schemas.ai_mentor import (
     AIMentorDiagnosticSessionDetail,
     AIMentorDiagnosticSessionRead,
     AIMentorLLMStatus,
-    AIMentorMockPlanCreate,
     AIMentorPlanDetailResponse,
     AIMentorPlanGenerateCreate,
     AIMentorPlanItemProgressUpdate,
@@ -32,7 +31,6 @@ from app.services.ai_mentor_service import (
     build_plan_detail_response,
     create_chat_session,
     create_generated_plan,
-    create_mock_plan,
     get_active_diagnostic_questions,
     get_active_or_latest_plan,
     get_latest_completed_diagnostic_session,
@@ -50,7 +48,7 @@ from app.services.ai_mentor_service import (
     update_chat_session,
     update_plan_item_progress,
 )
-from app.services.auth_service import get_current_student
+from app.services.auth_service import get_current_ai_mentor_student
 
 
 router = APIRouter()
@@ -61,7 +59,7 @@ router = APIRouter()
     response_model=AIMentorLLMStatus,
 )
 def get_llm_status(
-    current_student: Student = Depends(get_current_student),
+    current_student: Student = Depends(get_current_ai_mentor_student),
 ):
     del current_student
     return get_llm_provider_status()
@@ -78,7 +76,7 @@ def get_llm_status(
 )
 def get_diagnostic_questions(
     db: Session = Depends(get_db),
-    current_student: Student = Depends(get_current_student),
+    current_student: Student = Depends(get_current_ai_mentor_student),
 ):
     del current_student  # Endpoint faqat student tokeni bilan ochilishini ta'minlaydi.
     return get_active_diagnostic_questions(db)
@@ -92,7 +90,7 @@ def get_diagnostic_questions(
 def create_diagnostic_session(
     _payload: AIMentorDiagnosticSessionCreate | None = None,
     db: Session = Depends(get_db),
-    current_student: Student = Depends(get_current_student),
+    current_student: Student = Depends(get_current_ai_mentor_student),
 ):
     return start_diagnostic_session(db, current_student)
 
@@ -103,7 +101,7 @@ def create_diagnostic_session(
 )
 def get_diagnostic_sessions(
     db: Session = Depends(get_db),
-    current_student: Student = Depends(get_current_student),
+    current_student: Student = Depends(get_current_ai_mentor_student),
 ):
     return get_student_diagnostic_sessions(db, current_student)
 
@@ -114,7 +112,7 @@ def get_diagnostic_sessions(
 )
 def get_latest_diagnostic_session(
     db: Session = Depends(get_db),
-    current_student: Student = Depends(get_current_student),
+    current_student: Student = Depends(get_current_ai_mentor_student),
 ):
     diagnostic_session = get_latest_completed_diagnostic_session(
         db,
@@ -132,7 +130,7 @@ def get_latest_diagnostic_session(
 def get_diagnostic_session(
     session_id: int,
     db: Session = Depends(get_db),
-    current_student: Student = Depends(get_current_student),
+    current_student: Student = Depends(get_current_ai_mentor_student),
 ):
     diagnostic_session = get_student_diagnostic_session_or_404(
         db,
@@ -150,7 +148,7 @@ def submit_answers(
     session_id: int,
     payload: AIMentorDiagnosticAnswersSubmit,
     db: Session = Depends(get_db),
-    current_student: Student = Depends(get_current_student),
+    current_student: Student = Depends(get_current_ai_mentor_student),
 ):
     return submit_diagnostic_answers(
         db,
@@ -173,27 +171,9 @@ def submit_answers(
 def generate_plan(
     payload: AIMentorPlanGenerateCreate,
     db: Session = Depends(get_db),
-    current_student: Student = Depends(get_current_student),
+    current_student: Student = Depends(get_current_ai_mentor_student),
 ):
     return create_generated_plan(
-        db,
-        current_student,
-        diagnostic_session_id=payload.diagnostic_session_id,
-        start_date_value=payload.start_date,
-    )
-
-
-@router.post(
-    "/plans/mock",
-    response_model=AIMentorPlanDetailResponse,
-    status_code=status.HTTP_201_CREATED,
-)
-def generate_mock_plan(
-    payload: AIMentorMockPlanCreate,
-    db: Session = Depends(get_db),
-    current_student: Student = Depends(get_current_student),
-):
-    return create_mock_plan(
         db,
         current_student,
         diagnostic_session_id=payload.diagnostic_session_id,
@@ -207,7 +187,7 @@ def generate_mock_plan(
 )
 def get_plans(
     db: Session = Depends(get_db),
-    current_student: Student = Depends(get_current_student),
+    current_student: Student = Depends(get_current_ai_mentor_student),
 ):
     return get_student_plans(db, current_student)
 
@@ -218,7 +198,7 @@ def get_plans(
 )
 def get_current_plan(
     db: Session = Depends(get_db),
-    current_student: Student = Depends(get_current_student),
+    current_student: Student = Depends(get_current_ai_mentor_student),
 ):
     plan = get_active_or_latest_plan(db, current_student)
     if plan is None:
@@ -233,7 +213,7 @@ def get_current_plan(
 def get_plan(
     plan_id: int,
     db: Session = Depends(get_db),
-    current_student: Student = Depends(get_current_student),
+    current_student: Student = Depends(get_current_ai_mentor_student),
 ):
     plan = get_student_plan_or_404(db, current_student, plan_id)
     return build_plan_detail_response(db, plan)
@@ -247,7 +227,7 @@ def update_item_progress(
     item_id: int,
     payload: AIMentorPlanItemProgressUpdate,
     db: Session = Depends(get_db),
-    current_student: Student = Depends(get_current_student),
+    current_student: Student = Depends(get_current_ai_mentor_student),
 ):
     return update_plan_item_progress(
         db,
@@ -270,7 +250,7 @@ def update_item_progress(
 def start_chat_session(
     payload: AIMentorChatSessionCreate,
     db: Session = Depends(get_db),
-    current_student: Student = Depends(get_current_student),
+    current_student: Student = Depends(get_current_ai_mentor_student),
 ):
     return create_chat_session(db, current_student, payload)
 
@@ -281,7 +261,7 @@ def start_chat_session(
 )
 def get_chat_sessions(
     db: Session = Depends(get_db),
-    current_student: Student = Depends(get_current_student),
+    current_student: Student = Depends(get_current_ai_mentor_student),
 ):
     return get_student_chat_sessions(db, current_student)
 
@@ -293,7 +273,7 @@ def get_chat_sessions(
 def get_chat_session(
     session_id: int,
     db: Session = Depends(get_db),
-    current_student: Student = Depends(get_current_student),
+    current_student: Student = Depends(get_current_ai_mentor_student),
 ):
     chat_session = get_student_chat_session_or_404(
         db,
@@ -311,7 +291,7 @@ def patch_chat_session(
     session_id: int,
     payload: AIMentorChatSessionUpdate,
     db: Session = Depends(get_db),
-    current_student: Student = Depends(get_current_student),
+    current_student: Student = Depends(get_current_ai_mentor_student),
 ):
     return update_chat_session(
         db,
@@ -330,7 +310,7 @@ def send_chat_message_endpoint(
     session_id: int,
     payload: AIMentorChatRequest,
     db: Session = Depends(get_db),
-    current_student: Student = Depends(get_current_student),
+    current_student: Student = Depends(get_current_ai_mentor_student),
 ):
     return send_chat_message_service(
         db,
@@ -362,7 +342,7 @@ def stream_chat_message_endpoint(
     session_id: int,
     payload: AIMentorChatRequest,
     db: Session = Depends(get_db),
-    current_student: Student = Depends(get_current_student),
+    current_student: Student = Depends(get_current_ai_mentor_student),
 ):
     event_stream = stream_chat_message(
         db,

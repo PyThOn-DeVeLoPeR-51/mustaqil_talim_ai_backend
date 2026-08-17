@@ -174,3 +174,21 @@ def get_current_student(
         raise credentials_exception
 
     return student
+
+
+def get_current_ai_mentor_student(
+    current_student: Student = Depends(get_current_student),
+) -> Student:
+    """AI Mentor'ni faqat tajriba guruhi talabasiga ochadi.
+
+    ``get_current_student`` har requestda studentni DB'dan qayta oladi. Shu sababli
+    o'qituvchi guruhni tahrirlaganidan keyin eski JWT bilan ham yangi ruxsat
+    darhol kuchga kiradi. ``None`` va ``control`` fail-closed tarzda rad etiladi.
+    """
+
+    if current_student.experiment_group != "experimental":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="AI Mentor faqat tajriba guruhi talabalari uchun mavjud.",
+        )
+    return current_student
