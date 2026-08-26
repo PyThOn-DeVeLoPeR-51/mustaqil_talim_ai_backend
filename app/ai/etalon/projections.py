@@ -5,6 +5,8 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
+from app.ai.common.hough import normalize_hough_lines
+
 from app.ai.etalon.io import bin_to_lines
 from app.ai.etalon.line_types import dashed_like_count
 
@@ -484,7 +486,7 @@ def orientation_features(roi_255):
     hv_len = 0.0
     diag_len = 0.0
     if lines is not None:
-        for ln in lines[:, 0]:
+        for ln in normalize_hough_lines(lines):
             x1, y1, x2, y2 = ln
             dx = x2 - x1
             dy = y2 - y1

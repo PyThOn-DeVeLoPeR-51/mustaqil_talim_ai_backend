@@ -5,6 +5,8 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
+from app.ai.common.hough import normalize_hough_lines
+
 from app.ai.etalon.visible_view import _bin_to_lines, _component_angle_and_aspect, _remove_small_components, crop_box
 
 def _axial_angle_diff(a_deg: float, b_deg: float) -> float:
@@ -57,7 +59,7 @@ def detect_short_diag_segments_visible_section(lines_mask: np.ndarray):
                            minLineLength=max(8, int(0.035 * min(h, w))), maxLineGap=3)
     if segs is not None:
         allowed = [30, 45, 60, 120, 135, 150]
-        for s in segs[:, 0]:
+        for s in normalize_hough_lines(segs):
             x1, y1, x2, y2 = map(int, s)
             dx = x2 - x1; dy = y2 - y1
             L = float(np.hypot(dx, dy))
@@ -86,7 +88,7 @@ def _collect_parallel_hatch_lines(lines_mask: np.ndarray):
         return hatch_lines, debug
 
     rows = []
-    for s in segs[:, 0]:
+    for s in normalize_hough_lines(segs):
         x1, y1, x2, y2 = map(int, s)
         dx = x2 - x1; dy = y2 - y1
         L = float(np.hypot(dx, dy))

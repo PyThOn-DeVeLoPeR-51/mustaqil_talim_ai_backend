@@ -8,6 +8,8 @@ from typing import Any, Dict, Optional, Tuple
 import cv2
 import numpy as np
 
+from app.ai.common.hough import normalize_hough_lines
+
 from app.ai.optional.io import normalize_gray, preprocess_bundle, rgb_to_gray
 
 def order_points(pts: np.ndarray) -> np.ndarray:
@@ -97,7 +99,7 @@ def estimate_skew_angle(gray: np.ndarray) -> float:
     if lines is None:
         return 0.0
     angles, lengths = [], []
-    for line in lines[:, 0]:
+    for line in normalize_hough_lines(lines):
         x1, y1, x2, y2 = line
         dx, dy = x2 - x1, y2 - y1
         if dx == 0 and dy == 0:

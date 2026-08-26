@@ -7,6 +7,8 @@ from typing import Any, Dict, List, Tuple
 import cv2
 import numpy as np
 
+from app.ai.common.hough import normalize_hough_lines
+
 from app.ai.optional.config import CONFIG
 
 def crop_role_arrays(bundle: Dict[str, np.ndarray], box: Tuple[int, int, int, int]) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
@@ -37,7 +39,7 @@ def detect_visible_contours_in_patch(edges_patch: np.ndarray, cfg: Dict[str, Any
         return {"present": False, "count": 0, "total_length_ratio": 0.0}
     kept = []
     total_len = 0.0
-    for line in lines[:, 0]:
+    for line in normalize_hough_lines(lines):
         x1, y1, x2, y2 = line
         ln = line_len(x1, y1, x2, y2)
         ang = acute_deg(np.degrees(np.arctan2(y2 - y1, x2 - x1)))
@@ -140,7 +142,7 @@ def detect_hidden_dashed_in_patch(edges_patch: np.ndarray, cfg: Dict[str, Any] =
     )
     if lines is None:
         return {"present": False, "sequence_count": 0, "horizontal_sequences": [], "vertical_sequences": []}
-    raw = [tuple(map(int, ln)) for ln in lines[:, 0]]
+    raw = [tuple(map(int, ln)) for ln in normalize_hough_lines(lines)]
     hsegs, vsegs = _group_short_hv_segments(raw, edges_patch.shape, cfg)
     hseqs = _build_dashed_sequences(hsegs, cfg["dash_axis_tol"], w, cfg)
     vseqs = _build_dashed_sequences(vsegs, cfg["dash_axis_tol"], h, cfg)

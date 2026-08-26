@@ -95,6 +95,10 @@ class Settings(BaseSettings):
     RAG_EMBEDDING_CACHE_DIR: str = "app/rag_models"
     RAG_EMBEDDING_BATCH_SIZE: int = 16
     RAG_EMBEDDING_MAX_LENGTH: int = 512
+    # Remote Gemini embedding provider (production-friendly, low RAM).
+    RAG_GEMINI_BASE_URL: str = "https://generativelanguage.googleapis.com/v1beta"
+    RAG_EMBEDDING_TIMEOUT_SECONDS: float = 60.0
+    RAG_EMBEDDING_MAX_RETRIES: int = 2
     RAG_SEARCH_TOP_K: int = 5
     RAG_SEARCH_MAX_TOP_K: int = 20
 

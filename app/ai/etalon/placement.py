@@ -5,6 +5,8 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
+from app.ai.common.hough import normalize_hough_lines
+
 from app.ai.etalon.io import bin_to_lines
 
 def content_bbox(lines_255: np.ndarray, pad=20):
@@ -30,7 +32,7 @@ def angle_hist(lines_255, bins=18):
     if segs is None:
         return np.ones(bins) / bins
     angs = []
-    for x1, y1, x2, y2 in segs[:, 0]:
+    for x1, y1, x2, y2 in normalize_hough_lines(segs):
         dx = x2 - x1; dy = y2 - y1
         L = np.hypot(dx, dy)
         if L < 40:

@@ -7,6 +7,8 @@ import math
 import cv2
 import numpy as np
 
+from app.ai.common.hough import normalize_hough_lines
+
 from app.ai.etalon.config import STEP6_HYBRID_THR, STEP6_PER_PROJ
 
 def step6_odd(x: int) -> int:
@@ -166,7 +168,7 @@ def step6_extract_hatch_features(roi_img, debug=False):
     total_candidate_cnt = {45.0: 0, 60.0: 0}
 
     if lines is not None:
-        for l in lines[:, 0]:
+        for l in normalize_hough_lines(lines):
             x1, y1, x2, y2 = map(int, l)
             dx, dy = x2 - x1, y2 - y1
             length = math.hypot(dx, dy)

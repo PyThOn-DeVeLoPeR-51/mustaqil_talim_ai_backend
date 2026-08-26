@@ -5,6 +5,8 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
+from app.ai.common.hough import normalize_hough_lines
+
 from app.ai.etalon.io import bin_to_lines
 from app.ai.etalon.line_types import dashed_like_count
 
@@ -48,7 +50,7 @@ def line_long_ratio(lines_255: np.ndarray):
     if segs is None:
         return 0.0
     lengths = []
-    for x1, y1, x2, y2 in segs[:, 0]:
+    for x1, y1, x2, y2 in normalize_hough_lines(segs):
         L = float(np.hypot(x2 - x1, y2 - y1))
         if L >= 10:
             lengths.append(L)

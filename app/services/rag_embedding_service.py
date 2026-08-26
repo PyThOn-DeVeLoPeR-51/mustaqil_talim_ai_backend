@@ -16,6 +16,7 @@ from app.models.teacher import Teacher
 from app.rag.embeddings import (
     EmbeddingProvider,
     EmbeddingProviderError,
+    GeminiEmbeddingProvider,
     LocalONNXE5EmbeddingProvider,
     get_embedding_provider,
 )
@@ -30,7 +31,7 @@ from app.services.rag_service import get_teacher_document_or_404
 
 def get_embedding_status() -> RAGEmbeddingStatusRead:
     provider = get_embedding_provider()
-    if isinstance(provider, LocalONNXE5EmbeddingProvider):
+    if isinstance(provider, (LocalONNXE5EmbeddingProvider, GeminiEmbeddingProvider)):
         provider_status = provider.status()
         return RAGEmbeddingStatusRead(**provider_status.__dict__)
     return RAGEmbeddingStatusRead(

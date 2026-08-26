@@ -6,6 +6,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.core.config import settings
 from app.db.base import Base
 from app.models.rag import RAGChunk, RAGDocument
 from app.models.teacher import Teacher
@@ -172,9 +173,9 @@ class RAGStudentAccessScopeTestCase(unittest.TestCase):
                 document_id=document.id,
                 chunk_index=0,
                 content="Scope material content",
-                embedding=[0.1] * 384,
-                embedding_model="intfloat/multilingual-e5-small",
-                embedding_dimensions=384,
+                embedding=[0.1] * settings.RAG_EMBEDDING_DIMENSIONS,
+                embedding_model=settings.RAG_EMBEDDING_MODEL,
+                embedding_dimensions=settings.RAG_EMBEDDING_DIMENSIONS,
             )
         )
         self.db.commit()

@@ -3,8 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
-from typing import Protocol, Sequence
+import time
+from typing import Any, Protocol, Sequence
 
+import httpx
 import numpy as np
 
 from app.core.config import settings
@@ -31,6 +33,18 @@ class EmbeddingProviderStatus:
     dimensions: int
     loaded: bool
     cache_dir: str
+
+
+def _normalize_vectors(vectors: np.ndarray) -> np.ndarray:
+    """Cosine-search uchun vektorlarni L2 normalize qiladi."""
+
+    if vectors.ndim != 2:
+        raise EmbeddingProviderError(
+            f"Embedding matrix shape noto‘g‘ri: {vectors.shape}"
+        )
+    norms = np.linalg.norm(vectors, axis=1, keepdims=True)
+    norms = np.where(norms == 0.0, 1.0, norms)
+    return vectors / norms
 
 
 class LocalONNXE5EmbeddingProvider:
@@ -134,9 +148,7 @@ class LocalONNXE5EmbeddingProvider:
 
     @staticmethod
     def _normalize(vectors: np.ndarray) -> np.ndarray:
-        norms = np.linalg.norm(vectors, axis=1, keepdims=True)
-        norms = np.where(norms == 0.0, 1.0, norms)
-        return vectors / norms
+        return _normalize_vectors(vectors)
 
     @staticmethod
     def _average_pool(last_hidden_state: np.ndarray, attention_mask: np.ndarray) -> np.ndarray:
@@ -206,6 +218,187 @@ class LocalONNXE5EmbeddingProvider:
         return vectors[0]
 
 
+class GeminiEmbeddingProvider:
+    """Gemini Embedding API orqali low-memory remote embedding provider.
+
+    Render kabi RAM cheklangan production muhitida lokal ONNX modelni process
+    ichida yuklamasdan, faqat matn va embedding vektorlarini HTTP orqali uzatadi.
+    """
+
+    provider_name = "gemini"
+
+    def __init__(
+        self,
+        *,
+        api_key: str | None = None,
+        model_name: str | None = None,
+        dimensions: int | None = None,
+        batch_size: int | None = None,
+        base_url: str | None = None,
+        timeout_seconds: float | None = None,
+        max_retries: int | None = None,
+    ) -> None:
+        self.api_key = api_key if api_key is not None else settings.GEMINI_API_KEY
+        self.model_name = model_name or settings.RAG_EMBEDDING_MODEL
+        self.dimensions = dimensions or settings.RAG_EMBEDDING_DIMENSIONS
+        self.batch_size = max(1, batch_size or settings.RAG_EMBEDDING_BATCH_SIZE)
+        self.base_url = (base_url or settings.RAG_GEMINI_BASE_URL).rstrip("/")
+        self.timeout_seconds = timeout_seconds or settings.RAG_EMBEDDING_TIMEOUT_SECONDS
+        self.max_retries = (
+            settings.RAG_EMBEDDING_MAX_RETRIES if max_retries is None else max_retries
+        )
+
+    @property
+    def _model_resource(self) -> str:
+        clean = self.model_name.strip()
+        return clean if clean.startswith("models/") else f"models/{clean}"
+
+    def status(self) -> EmbeddingProviderStatus:
+        return EmbeddingProviderStatus(
+            provider=self.provider_name,
+            model=self.model_name,
+            dimensions=self.dimensions,
+            loaded=True,
+            cache_dir="",
+        )
+
+    def _require_api_key(self) -> str:
+        key = (self.api_key or "").strip()
+        if not key:
+            raise EmbeddingProviderError(
+                "GEMINI_API_KEY topilmadi. Render Environment'da kalitni sozlang."
+            )
+        return key
+
+    def _post_json(self, url: str, payload: dict[str, Any]) -> dict[str, Any]:
+        api_key = self._require_api_key()
+        last_error: Exception | None = None
+
+        for attempt in range(max(0, self.max_retries) + 1):
+            try:
+                response = httpx.post(
+                    url,
+                    headers={
+                        "x-goog-api-key": api_key,
+                        "Content-Type": "application/json",
+                    },
+                    json=payload,
+                    timeout=self.timeout_seconds,
+                )
+                if response.status_code == 429 or 500 <= response.status_code < 600:
+                    if attempt < self.max_retries:
+                        time.sleep(min(2.0 ** attempt, 4.0))
+                        continue
+                if response.is_error:
+                    body = response.text.strip().replace("\n", " ")[:800]
+                    raise EmbeddingProviderError(
+                        "Gemini embedding API xatosi: "
+                        f"HTTP {response.status_code}: {body or response.reason_phrase}"
+                    )
+                data = response.json()
+                if not isinstance(data, dict):
+                    raise EmbeddingProviderError("Gemini embedding javobi JSON object emas.")
+                return data
+            except EmbeddingProviderError:
+                raise
+            except (httpx.HTTPError, ValueError) as exc:
+                last_error = exc
+                if attempt < self.max_retries:
+                    time.sleep(min(2.0 ** attempt, 4.0))
+                    continue
+                break
+
+        raise EmbeddingProviderError(
+            f"Gemini embedding API bilan aloqa xatosi: {last_error}"
+        ) from last_error
+
+    def _config(self, *, task_type: str) -> dict[str, Any]:
+        return {
+            "taskType": task_type,
+            "outputDimensionality": self.dimensions,
+            "autoTruncate": True,
+        }
+
+    def _validate_and_normalize(self, vectors: Sequence[Sequence[float]]) -> list[list[float]]:
+        try:
+            matrix = np.asarray(vectors, dtype=np.float32)
+        except Exception as exc:
+            raise EmbeddingProviderError(f"Gemini embedding vektori noto‘g‘ri: {exc}") from exc
+
+        if matrix.ndim != 2 or matrix.shape[1] != self.dimensions:
+            raise EmbeddingProviderError(
+                "Gemini embedding dimension mos emas: "
+                f"kutilgan={self.dimensions}, olingan={matrix.shape}"
+            )
+        return _normalize_vectors(matrix).astype(np.float32).tolist()
+
+    def _embed_batch(self, texts: Sequence[str], *, task_type: str) -> list[list[float]]:
+        cleaned = [text.strip() for text in texts if text and text.strip()]
+        if len(cleaned) != len(texts):
+            raise EmbeddingProviderError("Embedding uchun bo‘sh matn yuborib bo‘lmaydi.")
+        if not cleaned:
+            return []
+
+        resource = self._model_resource
+        model_id = resource.removeprefix("models/")
+        url = f"{self.base_url}/models/{model_id}:batchEmbedContents"
+        results: list[list[float]] = []
+
+        for start in range(0, len(cleaned), self.batch_size):
+            batch = cleaned[start : start + self.batch_size]
+            payload = {
+                "requests": [
+                    {
+                        "model": resource,
+                        "content": {"parts": [{"text": text}]},
+                        "embedContentConfig": self._config(task_type=task_type),
+                    }
+                    for text in batch
+                ]
+            }
+            data = self._post_json(url, payload)
+            embeddings = data.get("embeddings")
+            if not isinstance(embeddings, list) or len(embeddings) != len(batch):
+                raise EmbeddingProviderError(
+                    "Gemini batch embedding javobidagi embedding soni mos emas."
+                )
+            vectors: list[list[float]] = []
+            for item in embeddings:
+                values = item.get("values") if isinstance(item, dict) else None
+                if not isinstance(values, list):
+                    raise EmbeddingProviderError(
+                        "Gemini batch embedding javobida values topilmadi."
+                    )
+                vectors.append(values)
+            results.extend(self._validate_and_normalize(vectors))
+
+        return results
+
+    def embed_documents(self, texts: Sequence[str]) -> list[list[float]]:
+        return self._embed_batch(texts, task_type="RETRIEVAL_DOCUMENT")
+
+    def embed_query(self, text: str) -> list[float]:
+        clean = text.strip()
+        if not clean:
+            raise EmbeddingProviderError("Embedding uchun bo‘sh matn yuborib bo‘lmaydi.")
+
+        resource = self._model_resource
+        model_id = resource.removeprefix("models/")
+        url = f"{self.base_url}/models/{model_id}:embedContent"
+        payload = {
+            "content": {"parts": [{"text": clean}]},
+            "embedContentConfig": self._config(task_type="RETRIEVAL_QUERY"),
+        }
+        data = self._post_json(url, payload)
+        embedding = data.get("embedding")
+        values = embedding.get("values") if isinstance(embedding, dict) else None
+        if not isinstance(values, list):
+            raise EmbeddingProviderError(
+                "Gemini query embedding javobida embedding.values topilmadi."
+            )
+        return self._validate_and_normalize([values])[0]
+
+
 _provider: EmbeddingProvider | None = None
 _provider_lock = Lock()
 
@@ -220,11 +413,14 @@ def get_embedding_provider() -> EmbeddingProvider:
             return _provider
 
         provider_name = settings.RAG_EMBEDDING_PROVIDER.strip().lower()
-        if provider_name != "local_onnx_e5":
+        if provider_name == "local_onnx_e5":
+            _provider = LocalONNXE5EmbeddingProvider()
+        elif provider_name in {"gemini", "gemini_embedding"}:
+            _provider = GeminiEmbeddingProvider()
+        else:
             raise EmbeddingProviderError(
                 f"Qo‘llab-quvvatlanmaydigan RAG_EMBEDDING_PROVIDER: {provider_name}"
             )
-        _provider = LocalONNXE5EmbeddingProvider()
         return _provider
 
 

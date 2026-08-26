@@ -7,6 +7,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import cv2
 import numpy as np
 
+from app.ai.common.hough import normalize_hough_lines
+
 from app.ai.optional.config import CONFIG
 from app.ai.optional.geometry import _box_center, _intersects, _overlap_ratio, merge_boxes_simple
 
@@ -80,7 +82,7 @@ def _extract_dim_lines_in_band(patch_bw: np.ndarray, patch_edges: np.ndarray, cf
         maxLineGap=cfg["dim_hough_max_gap"]
     )
     if lines is not None:
-        for line in lines[:, 0]:
+        for line in normalize_hough_lines(lines):
             x1, y1, x2, y2 = line
             ln = float(np.hypot(x2 - x1, y2 - y1))
             if ln < base:

@@ -7,6 +7,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import cv2
 import numpy as np
 
+from app.ai.common.hough import normalize_hough_lines
+
 from app.ai.optional.config import CONFIG
 from app.ai.optional.geometry import _smooth_1d, box_area, clip_box, merge_boxes_iter
 
@@ -154,7 +156,7 @@ def estimate_region_orientation_type(edges_patch: np.ndarray) -> Dict[str, Any]:
     hv_len = 0.0
     diag_len = 0.0
     total = 0.0
-    for line in lines[:, 0]:
+    for line in normalize_hough_lines(lines):
         x1, y1, x2, y2 = line
         length = float(np.hypot(x2 - x1, y2 - y1))
         if length < 1:
@@ -246,7 +248,7 @@ def _orientation_split_boxes(
     diag_mask = np.zeros((ph, pw), dtype=np.uint8)
     hv_len = 0.0
     diag_len = 0.0
-    for line in lines[:, 0]:
+    for line in normalize_hough_lines(lines):
         lx1, ly1, lx2, ly2 = [int(v) for v in line]
         length = float(np.hypot(lx2 - lx1, ly2 - ly1))
         if length < 8:

@@ -47,13 +47,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-Path("app/uploads").mkdir(parents=True, exist_ok=True)
-
-app.mount(
-    "/uploads",
-    StaticFiles(directory="app/uploads"),
-    name="uploads",
-)
+if settings.STORAGE_PROVIDER.strip().lower() == "local":
+    local_upload_dir = Path(settings.LOCAL_UPLOAD_DIR)
+    local_upload_dir.mkdir(parents=True, exist_ok=True)
+    app.mount(
+        "/uploads",
+        StaticFiles(directory=str(local_upload_dir)),
+        name="uploads",
+    )
 
 app.include_router(api_router, prefix=settings.API_V1_PREFIX)
 

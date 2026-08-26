@@ -8,6 +8,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import cv2
 import numpy as np
 
+from app.ai.common.hough import normalize_hough_lines
+
 from app.ai.optional.config import CONFIG
 from app.ai.optional.normalization import rotate_bound
 
@@ -88,7 +90,7 @@ def _detect_hatch_single(patch_bw: np.ndarray, patch_edges: np.ndarray, cfg: Dic
             minLineLength=max(6, patch_min // min_part), maxLineGap=10
         )
         if lines is not None:
-            all_lines.extend(lines[:, 0].tolist())
+            all_lines.extend(normalize_hough_lines(lines).tolist())
     if len(all_lines) == 0:
         return {"present": False, "reason": "no_lines", "line_count": 0}
     diag_angles, diag_lengths, diag_segments = [], [], []

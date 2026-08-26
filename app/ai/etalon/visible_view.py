@@ -5,6 +5,8 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
+from app.ai.common.hough import normalize_hough_lines
+
 from app.ai.etalon.projections import box_area
 
 def _bin_to_lines(thr_img: np.ndarray):
@@ -118,7 +120,7 @@ def hough_angle_features(mask: np.ndarray):
     seg_count = 0
 
     if segs is not None:
-        for s in segs[:, 0]:
+        for s in normalize_hough_lines(segs):
             x1, y1, x2, y2 = s
             dx = x2 - x1; dy = y2 - y1
             L = float(np.hypot(dx, dy))
