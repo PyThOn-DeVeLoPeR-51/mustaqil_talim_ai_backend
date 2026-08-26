@@ -6,6 +6,7 @@ import hashlib
 import logging
 from pathlib import Path
 import shutil
+import tempfile
 import uuid
 import zipfile
 
@@ -19,6 +20,12 @@ from app.models.task import Task
 from app.models.teacher import Teacher
 from app.rag.chunker import chunk_blocks
 from app.rag.extractors import DocumentExtractionError, extract_document
+from app.storage import (
+    delete_storage_object,
+    materialize_storage_file,
+    persist_local_file,
+    storage_exists,
+)
 
 
 ALLOWED_RAG_EXTENSIONS = {".pdf": "pdf", ".docx": "docx"}
@@ -34,7 +41,7 @@ class RAGProcessingError(RuntimeError):
 
 @dataclass(frozen=True)
 class StoredRAGFile:
-    path: Path
+    storage_key: str
     original_filename: str
     file_type: str
     mime_type: str | None
@@ -110,17 +117,17 @@ def _validate_teacher_storage_quota(
         )
 
 
-def _validate_disk_free_space(storage_root: Path) -> None:
-    storage_root.mkdir(parents=True, exist_ok=True)
+def _validate_disk_free_space(temp_root: Path) -> None:
+    temp_root.mkdir(parents=True, exist_ok=True)
     min_free = int(settings.RAG_STORAGE_MIN_FREE_MB * 1024 * 1024)
     if min_free <= 0:
         return
-    free = shutil.disk_usage(storage_root).free
+    free = shutil.disk_usage(temp_root).free
     if free < min_free:
         raise HTTPException(
             status_code=507,
             detail={
-                "message": "Server diskida RAG fayllari uchun yetarli bo‘sh joy yo‘q.",
+                "message": "Server temporary diskida RAG faylini qayta ishlash uchun yetarli bo‘sh joy yo‘q.",
                 "free_bytes": free,
                 "required_free_bytes": min_free,
             },
@@ -184,52 +191,57 @@ def save_rag_upload(file: UploadFile, teacher_id: int) -> StoredRAGFile:
         )
 
     max_bytes = int(settings.RAG_MAX_FILE_SIZE_MB * 1024 * 1024)
-    storage_root = Path(settings.RAG_STORAGE_DIR)
-    _validate_disk_free_space(storage_root)
-    storage_dir = storage_root / str(teacher_id)
-    storage_dir.mkdir(parents=True, exist_ok=True)
-    final_path = storage_dir / f"{uuid.uuid4().hex}{extension}"
-    temp_path = final_path.with_suffix(final_path.suffix + ".part")
+    temp_root = Path(tempfile.gettempdir()) / "mustaqil-rag"
+    _validate_disk_free_space(temp_root)
 
     digest = hashlib.sha256()
     total = 0
+    storage_key = (
+        f"rag/teachers/{teacher_id}/documents/"
+        f"{uuid.uuid4().hex}{extension}"
+    )
 
-    try:
-        file.file.seek(0)
-        with temp_path.open("wb") as target:
-            while True:
-                chunk = file.file.read(BUFFER_SIZE)
-                if not chunk:
-                    break
-                total += len(chunk)
-                if total > max_bytes:
-                    raise HTTPException(
-                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                        detail=f"RAG fayli {settings.RAG_MAX_FILE_SIZE_MB} MB dan katta bo‘lishi mumkin emas.",
-                    )
-                digest.update(chunk)
-                target.write(chunk)
-
-        if total == 0:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Bo‘sh fayl yuklab bo‘lmaydi.",
-            )
-
-        _validate_file_signature(temp_path, file_type)
-        temp_path.replace(final_path)
-    except Exception:
-        temp_path.unlink(missing_ok=True)
-        final_path.unlink(missing_ok=True)
-        raise
-    finally:
+    with tempfile.TemporaryDirectory(
+        prefix="upload-",
+        dir=str(temp_root),
+    ) as temp_dir:
+        temp_path = Path(temp_dir) / f"document{extension}"
         try:
             file.file.seek(0)
-        except Exception:
-            pass
+            with temp_path.open("wb") as target:
+                while True:
+                    chunk = file.file.read(BUFFER_SIZE)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > max_bytes:
+                        raise HTTPException(
+                            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                            detail=f"RAG fayli {settings.RAG_MAX_FILE_SIZE_MB} MB dan katta bo‘lishi mumkin emas.",
+                        )
+                    digest.update(chunk)
+                    target.write(chunk)
+
+            if total == 0:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Bo‘sh fayl yuklab bo‘lmaydi.",
+                )
+
+            _validate_file_signature(temp_path, file_type)
+            persist_local_file(
+                temp_path,
+                storage_key,
+                content_type=file.content_type,
+            )
+        finally:
+            try:
+                file.file.seek(0)
+            except Exception:
+                pass
 
     return StoredRAGFile(
-        path=final_path,
+        storage_key=storage_key,
         original_filename=original_filename,
         file_type=file_type,
         mime_type=file.content_type,
@@ -277,7 +289,8 @@ def process_rag_document(db: Session, document: RAGDocument) -> RAGDocument:
     db.refresh(document)
 
     try:
-        extracted = extract_document(document.stored_file_path, document.file_type)
+        with materialize_storage_file(document.stored_file_path) as local_path:
+            extracted = extract_document(str(local_path), document.file_type)
         chunks = chunk_blocks(
             extracted.blocks,
             chunk_size=settings.RAG_CHUNK_SIZE_CHARS,
@@ -392,14 +405,14 @@ def create_rag_document_record(
             task_id=task_id,
             title=clean_title,
             original_filename=stored.original_filename,
-            stored_file_path=str(stored.path),
+            stored_file_path=stored.storage_key,
             file_type=stored.file_type,
             mime_type=stored.mime_type,
             file_size_bytes=stored.size_bytes,
             checksum_sha256=stored.checksum_sha256,
             status="uploaded",
             chunk_count=0,
-            metadata_json={"storage": "private_local"},
+            metadata_json={"storage": settings.STORAGE_PROVIDER.strip().lower()},
         )
         db.add(document)
         db.commit()
@@ -415,7 +428,10 @@ def create_rag_document_record(
         return document
     except Exception:
         db.rollback()
-        stored.path.unlink(missing_ok=True)
+        try:
+            delete_storage_object(stored.storage_key)
+        except Exception:
+            logger.exception("RAG orphan object cleanup failed")
         raise
 
 
@@ -439,7 +455,7 @@ def reprocess_teacher_document(
     document_id: int,
 ) -> RAGDocument:
     document = get_teacher_document_or_404(db, teacher, document_id)
-    if not Path(document.stored_file_path).exists():
+    if not storage_exists(document.stored_file_path):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Hujjatning saqlangan fayli topilmadi.",
@@ -533,12 +549,10 @@ def delete_teacher_document(
     document_id: int,
 ) -> None:
     document = get_teacher_document_or_404(db, teacher, document_id)
-    stored_path = Path(document.stored_file_path)
+    storage_key = document.stored_file_path
     db.delete(document)
     db.commit()
-    stored_path.unlink(missing_ok=True)
-    # teacher papkasi bo‘sh qolgan bo‘lsa tozalashga urinib ko‘ramiz.
     try:
-        stored_path.parent.rmdir()
-    except OSError:
-        pass
+        delete_storage_object(storage_key)
+    except Exception as exc:  # pragma: no cover - external storage failure
+        logger.warning("RAG storage cleanup failed for %s: %s", storage_key, exc)

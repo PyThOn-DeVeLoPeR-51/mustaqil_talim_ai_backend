@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+from io import BytesIO
 import os
 import sys
 import tempfile
@@ -42,15 +43,19 @@ if importlib.util.find_spec("pgvector") is None:
     sys.modules["pgvector.psycopg2"] = pgvector_psycopg2
     sys.modules["pgvector.sqlalchemy"] = pgvector_sqlalchemy
 
+from fastapi import UploadFile
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.core.config import settings
 from app.db.base import Base
 from app.models.student import Student
 from app.models.task import Task, TaskAssignment
 from app.models.teacher import Teacher
 from app.services.submission_service import create_submission_for_student
+from app.storage import storage_exists
+from app.storage.service import reset_storage_backend
 
 
 class DrawingAISubmissionIntegrationTestCase(unittest.TestCase):
@@ -97,6 +102,62 @@ class DrawingAISubmissionIntegrationTestCase(unittest.TestCase):
     def tearDown(self) -> None:
         self.db.close()
         self.engine.dispose()
+
+    def test_managed_storage_persists_submission_and_ai_overlay(self) -> None:
+        original_provider = settings.STORAGE_PROVIDER
+        original_upload_dir = settings.LOCAL_UPLOAD_DIR
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                settings.STORAGE_PROVIDER = "local"
+                settings.LOCAL_UPLOAD_DIR = str(Path(directory) / "uploads")
+                reset_storage_backend()
+
+                drawing_file = UploadFile(
+                    filename="drawing.png",
+                    file=BytesIO(b"drawing-bytes"),
+                )
+
+                def fake_evaluate(**kwargs):
+                    output_dir = Path(kwargs["output_dir"])
+                    overlay = output_dir / "overlay.png"
+                    overlay.write_bytes(b"overlay-bytes")
+                    return {
+                        "total_score": 88.0,
+                        "ai_json_result": {
+                            "student_file": kwargs["student_file_path"],
+                            "artifacts": {"overlay": str(overlay)},
+                        },
+                        "overlay_path": str(overlay),
+                        "table_json": [],
+                    }
+
+                with patch(
+                    "app.services.submission_service.evaluate_submission_with_ai",
+                    side_effect=fake_evaluate,
+                ):
+                    submission = create_submission_for_student(
+                        db=self.db,
+                        student=self.student,
+                        task_id=self.task.id,
+                        drawing_file=drawing_file,
+                    )
+
+                self.assertTrue(submission.uploaded_file_path.startswith("submissions/"))
+                self.assertTrue(submission.overlay_path.startswith(f"results/submissions/{submission.id}/"))
+                self.assertTrue(storage_exists(submission.uploaded_file_path))
+                self.assertTrue(storage_exists(submission.overlay_path))
+                self.assertEqual(
+                    submission.ai_json_result["student_file"],
+                    submission.uploaded_file_path,
+                )
+                self.assertEqual(
+                    submission.ai_json_result["artifacts"]["overlay"],
+                    submission.overlay_path,
+                )
+        finally:
+            settings.STORAGE_PROVIDER = original_provider
+            settings.LOCAL_UPLOAD_DIR = original_upload_dir
+            reset_storage_backend()
 
     def test_teacher_description_reaches_optional_evaluator(self) -> None:
         fake_result = {

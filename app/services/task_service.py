@@ -1,4 +1,4 @@
-import shutil
+import logging
 import uuid
 from pathlib import Path
 
@@ -10,12 +10,19 @@ from app.models.submission import Submission
 from app.models.task import Task, TaskAssignment
 from app.models.teacher import Teacher
 from app.schemas.task import TaskUpdate
+from app.storage import (
+    delete_storage_object,
+    delete_storage_prefix,
+    persist_upload_file,
+    storage_read_url,
+)
 
 
 ALLOWED_REFERENCE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".pdf"}
+logger = logging.getLogger("app.task.service")
 
 
-def save_task_file(file: UploadFile, upload_dir: str = "app/uploads/tasks") -> str:
+def save_task_file(file: UploadFile, *, teacher_id: int, kind: str) -> str:
     original_name = Path(file.filename or "").name
     extension = Path(original_name).suffix.lower()
 
@@ -25,23 +32,23 @@ def save_task_file(file: UploadFile, upload_dir: str = "app/uploads/tasks") -> s
             detail="Faqat JPG, JPEG, PNG yoki PDF fayl yuklash mumkin.",
         )
 
-    Path(upload_dir).mkdir(parents=True, exist_ok=True)
+    if kind not in {"references", "instructions"}:
+        raise ValueError("Noto‘g‘ri task storage turi.")
 
-    safe_filename = f"{uuid.uuid4().hex}{extension}"
-    file_path = Path(upload_dir) / safe_filename
-
-    with file_path.open("wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
-
-    return str(file_path)
-
-
-def save_reference_file(file: UploadFile, upload_dir: str = "app/uploads/tasks") -> str:
-    return save_task_file(file=file, upload_dir=upload_dir)
+    key = f"tasks/teachers/{teacher_id}/{kind}/{uuid.uuid4().hex}{extension}"
+    return persist_upload_file(
+        file.file,
+        key,
+        content_type=file.content_type,
+    )
 
 
-def save_instruction_file(file: UploadFile, upload_dir: str = "app/uploads/tasks") -> str:
-    return save_task_file(file=file, upload_dir=upload_dir)
+def save_reference_file(file: UploadFile, *, teacher_id: int) -> str:
+    return save_task_file(file=file, teacher_id=teacher_id, kind="references")
+
+
+def save_instruction_file(file: UploadFile, *, teacher_id: int) -> str:
+    return save_task_file(file=file, teacher_id=teacher_id, kind="instructions")
 
 
 def parse_student_ids(raw_student_ids: str | None) -> list[int]:
@@ -96,12 +103,52 @@ def ensure_teacher_owns_students(
         )
 
 
+def validate_task_create_inputs(
+    db: Session,
+    teacher: Teacher,
+    *,
+    mode: str,
+    assessment_stage: str | None,
+    has_reference: bool,
+    assigned_student_ids: list[int],
+) -> None:
+    if mode not in {"etalon", "optional"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="mode faqat 'etalon' yoki 'optional' bo‘lishi mumkin.",
+        )
+
+    if mode == "etalon" and not has_reference:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Etalon rejim uchun reference_file yuklash majburiy.",
+        )
+
+    if assessment_stage not in {None, "pretest", "intermediate", "posttest"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "assessment_stage faqat 'pretest', "
+                "'intermediate' yoki 'posttest' bo‘lishi mumkin."
+            ),
+        )
+
+    ensure_teacher_owns_students(
+        db=db,
+        teacher_id=teacher.id,
+        student_ids=assigned_student_ids,
+    )
+
+
 def build_task_response(db: Session, task: Task, include_reference: bool = True) -> dict:
     assigned_student_ids = (
         db.query(TaskAssignment.student_id)
         .filter(TaskAssignment.task_id == task.id)
         .all()
     )
+
+    reference_file_path = task.reference_file_path if include_reference else None
+    instruction_file_path = task.instruction_file_path
 
     return {
         "id": task.id,
@@ -113,8 +160,10 @@ def build_task_response(db: Session, task: Task, include_reference: bool = True)
         "assessment_stage": task.assessment_stage,
         "academic_period": task.academic_period,
         "mode": task.mode,
-        "reference_file_path": task.reference_file_path if include_reference else None,
-        "instruction_file_path": task.instruction_file_path,
+        "reference_file_path": reference_file_path,
+        "reference_file_url": storage_read_url(reference_file_path),
+        "instruction_file_path": instruction_file_path,
+        "instruction_file_url": storage_read_url(instruction_file_path),
         "deadline": task.deadline,
         "is_active": task.is_active,
         "created_at": task.created_at,
@@ -137,31 +186,13 @@ def create_task_for_teacher(
     instruction_file_path: str | None,
     assigned_student_ids: list[int],
 ) -> dict:
-    if mode not in {"etalon", "optional"}:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="mode faqat 'etalon' yoki 'optional' bo‘lishi mumkin.",
-        )
-
-    if mode == "etalon" and not reference_file_path:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Etalon rejim uchun reference_file yuklash majburiy.",
-        )
-
-    if assessment_stage not in {None, "pretest", "intermediate", "posttest"}:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                "assessment_stage faqat 'pretest', "
-                "'intermediate' yoki 'posttest' bo‘lishi mumkin."
-            ),
-        )
-
-    ensure_teacher_owns_students(
-        db=db,
-        teacher_id=teacher.id,
-        student_ids=assigned_student_ids,
+    validate_task_create_inputs(
+        db,
+        teacher,
+        mode=mode,
+        assessment_stage=assessment_stage,
+        has_reference=bool(reference_file_path),
+        assigned_student_ids=assigned_student_ids,
     )
 
     task = Task(
@@ -321,9 +352,31 @@ def delete_teacher_task(
         task_id=task_id,
     )
 
+    submissions = (
+        db.query(Submission.id, Submission.uploaded_file_path, Submission.overlay_path)
+        .filter(Submission.task_id == task.id)
+        .all()
+    )
+    object_paths = [task.reference_file_path, task.instruction_file_path]
+    object_paths.extend(item.uploaded_file_path for item in submissions)
+    object_paths.extend(item.overlay_path for item in submissions)
+    submission_ids = [item.id for item in submissions]
+
     db.delete(task)
     db.commit()
 
+    # Storage cleanup is best-effort: DB deletion must not be rolled back by an
+    # external object-store outage. Orphan cleanup can be retried later.
+    for object_path in object_paths:
+        try:
+            delete_storage_object(object_path)
+        except Exception as exc:  # pragma: no cover - external storage failure
+            logger.warning("Task storage object cleanup failed: %s", exc)
+    for submission_id in submission_ids:
+        try:
+            delete_storage_prefix(f"results/submissions/{submission_id}")
+        except Exception as exc:  # pragma: no cover - external storage failure
+            logger.warning("Task result prefix cleanup failed: %s", exc)
 
 
 def is_reference_visible_for_student(db: Session, task_id: int, student_id: int, max_attempts: int = 2) -> bool:

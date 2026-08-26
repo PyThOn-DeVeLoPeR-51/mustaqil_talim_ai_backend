@@ -19,6 +19,7 @@ from app.services.task_service import (
     save_instruction_file,
     save_reference_file,
     update_teacher_task,
+    validate_task_create_inputs,
 )
 
 
@@ -45,16 +46,30 @@ def create_task(
     db: Session = Depends(get_db),
     current_teacher: Teacher = Depends(get_current_teacher),
 ):
+    student_ids = parse_student_ids(assigned_student_ids)
+    validate_task_create_inputs(
+        db,
+        current_teacher,
+        mode=mode,
+        assessment_stage=assessment_stage,
+        has_reference=reference_file is not None,
+        assigned_student_ids=student_ids,
+    )
+
     reference_file_path = None
     instruction_file_path = None
 
     if reference_file:
-        reference_file_path = save_reference_file(reference_file)
+        reference_file_path = save_reference_file(
+            reference_file,
+            teacher_id=current_teacher.id,
+        )
 
     if instruction_file:
-        instruction_file_path = save_instruction_file(instruction_file)
-
-    student_ids = parse_student_ids(assigned_student_ids)
+        instruction_file_path = save_instruction_file(
+            instruction_file,
+            teacher_id=current_teacher.id,
+        )
 
     return create_task_for_teacher(
         db=db,

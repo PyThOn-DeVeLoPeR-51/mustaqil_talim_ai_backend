@@ -19,7 +19,9 @@ class TaskRead(BaseModel):
     academic_period: str | None = None
     mode: TaskMode
     reference_file_path: str | None = None
+    reference_file_url: str | None = None
     instruction_file_path: str | None = None
+    instruction_file_url: str | None = None
     deadline: datetime | None = None
     is_active: bool
     created_at: datetime

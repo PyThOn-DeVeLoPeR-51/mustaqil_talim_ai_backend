@@ -14,7 +14,6 @@ from app.services.submission_service import (
     get_teacher_submission_or_404,
     get_teacher_submissions,
     get_teacher_task_submissions,
-    save_submission_file,
 )
 
 
@@ -32,13 +31,11 @@ def create_submission(
     db: Session = Depends(get_db),
     current_student: Student = Depends(get_current_student),
 ):
-    uploaded_file_path = save_submission_file(drawing_file)
-
     return create_submission_for_student(
         db=db,
         student=current_student,
         task_id=task_id,
-        uploaded_file_path=uploaded_file_path,
+        drawing_file=drawing_file,
     )
 
 

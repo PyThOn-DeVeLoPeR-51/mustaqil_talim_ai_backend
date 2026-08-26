@@ -53,6 +53,17 @@ class Settings(BaseSettings):
     OPENROUTER_SITE_URL: str | None = None
     OPENROUTER_APP_NAME: str = "Mustaqil Talim AI Platforma"
 
+
+    # Persistent object storage. Production uses Cloudflare R2; local keeps
+    # the historical filesystem behavior for development and tests.
+    STORAGE_PROVIDER: str = "local"
+    LOCAL_UPLOAD_DIR: str = "app/uploads"
+    R2_ACCOUNT_ID: str | None = None
+    R2_ACCESS_KEY_ID: str | None = None
+    R2_SECRET_ACCESS_KEY: str | None = None
+    R2_BUCKET_NAME: str | None = None
+    R2_PRESIGNED_GET_TTL_SECONDS: int = 900
+
     # RAG document ingestion sozlamalari. Fayllar /uploads dan tashqarida
     # saqlanadi, shuning uchun public StaticFiles orqali ochilmaydi.
     RAG_STORAGE_DIR: str = "app/rag_storage"

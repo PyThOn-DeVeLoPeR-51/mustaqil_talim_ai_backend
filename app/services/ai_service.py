@@ -40,6 +40,7 @@ def evaluate_submission_with_ai(
     student_file_path: str,
     reference_file_path: str | None = None,
     task_text: str = "",
+    output_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     """Evaluate a student drawing without changing the existing score criteria.
 
@@ -68,7 +69,7 @@ def evaluate_submission_with_ai(
         mode=evaluation_mode,
         student_path=Path(student_file_path),
         reference_path=Path(reference_file_path) if reference_file_path else None,
-        output_dir=RESULTS_DIR,
+        output_dir=Path(output_dir) if output_dir is not None else RESULTS_DIR,
         task_text=task_text or "",
     )
 

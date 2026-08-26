@@ -14,6 +14,7 @@ PyMuPDF
 numpy
 Pillow
 httpx
+boto3>=1.35.0,<2.0.0
 openai>=2.15.0,<3.0.0
 pgvector>=0.5.0,<1.0.0
 

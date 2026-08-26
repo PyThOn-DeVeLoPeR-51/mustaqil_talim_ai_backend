@@ -1,13 +1,14 @@
 from copy import deepcopy
+from pathlib import Path
 
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.core.files import ensure_file_preview, to_upload_url
 from app.models.student import Student
 from app.models.submission import Submission
 from app.models.task import Task
 from app.models.teacher import Teacher
+from app.storage import canonical_storage_key, storage_read_url
 
 
 
@@ -75,8 +76,12 @@ def build_result_response(
     task: Task | None = None,
     student: Student | None = None,
 ) -> dict:
-    uploaded_preview_path = ensure_file_preview(
-        submission.uploaded_file_path
+    uploaded_file_url = storage_read_url(submission.uploaded_file_path)
+    uploaded_suffix = Path(
+        canonical_storage_key(submission.uploaded_file_path)
+    ).suffix.lower()
+    uploaded_preview_url = (
+        None if uploaded_suffix == ".pdf" else uploaded_file_url
     )
 
     return {
@@ -92,14 +97,14 @@ def build_result_response(
         "mode": submission.mode,
 
         "uploaded_file_path": submission.uploaded_file_path,
-        "uploaded_file_url": to_upload_url(submission.uploaded_file_path),
-        "uploaded_preview_url": to_upload_url(uploaded_preview_path),
+        "uploaded_file_url": uploaded_file_url,
+        "uploaded_preview_url": uploaded_preview_url,
 
         "total_score": submission.total_score,
         "ai_json_result": submission.ai_json_result,
 
         "overlay_path": submission.overlay_path,
-        "overlay_url": to_upload_url(submission.overlay_path),
+        "overlay_url": storage_read_url(submission.overlay_path),
 
         "table_json": submission.table_json,
 
