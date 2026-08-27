@@ -14,6 +14,9 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from app.db.database import SessionLocal
+# Standalone scriptda barcha SQLAlchemy mapper/relationship lar querydan oldin
+# ro'yxatdan o'tishi uchun markaziy model registry-ni yuklaymiz.
+import app.db.base as _model_registry  # noqa: F401
 from app.services.ai_mentor_service import seed_diagnostic_questions
 
 
