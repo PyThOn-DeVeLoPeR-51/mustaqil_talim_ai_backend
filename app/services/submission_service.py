@@ -211,6 +211,33 @@ def check_task_deadline(task: Task) -> None:
         )
 
 
+def ensure_no_active_submission(
+    db: Session,
+    student_id: int,
+    task_id: int,
+) -> None:
+    """Bir studentning keyingi urinishini avvalgi AI job tugamaguncha bloklaydi."""
+
+    active = (
+        db.query(Submission)
+        .filter(
+            Submission.student_id == student_id,
+            Submission.task_id == task_id,
+            Submission.status == "pending",
+        )
+        .order_by(Submission.id.desc())
+        .first()
+    )
+    if active is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Avvalgi urinish AI baholash navbatida yoki tekshirilmoqda. "
+                "Natija tayyor bo‘lgach keyingi urinishni yuboring."
+            ),
+        )
+
+
 def get_next_attempt_number(
     db: Session,
     student_id: int,
@@ -248,6 +275,11 @@ def create_submission_for_student(
         task_id=task_id,
     )
     check_task_deadline(task)
+    ensure_no_active_submission(
+        db=db,
+        student_id=student.id,
+        task_id=task.id,
+    )
     attempt_number = get_next_attempt_number(
         db=db,
         student_id=student.id,
@@ -285,7 +317,18 @@ def create_submission_for_student(
     )
 
     try:
+        # Submission va queue job bitta DB transactionda yaratiladi. HTTP request
+        # Drawing AI tugashini kutmaydi: worker keyin durable queue'dan oladi.
         db.add(submission)
+        db.flush()
+
+        from app.services.drawing_job_service import enqueue_drawing_evaluation_job
+
+        enqueue_drawing_evaluation_job(
+            db,
+            submission,
+            commit=False,
+        )
         db.commit()
         db.refresh(submission)
     except Exception:
@@ -297,34 +340,6 @@ def create_submission_for_student(
                 pass
         raise
 
-    try:
-        if managed_storage:
-            ai_result = _evaluate_submission_from_storage(
-                submission=submission,
-                task=task,
-            )
-        else:
-            ai_result = evaluate_submission_with_ai(
-                mode=task.mode,
-                student_file_path=stored_file_path,
-                reference_file_path=task.reference_file_path,
-                task_text=task.description or "",
-            )
-
-        submission.total_score = ai_result["total_score"]
-        submission.ai_json_result = ai_result["ai_json_result"]
-        submission.overlay_path = ai_result["overlay_path"]
-        submission.table_json = ai_result["table_json"]
-        submission.status = "evaluated"
-
-    except Exception as error:
-        submission.status = "failed"
-        submission.ai_json_result = {
-            "error": str(error),
-        }
-
-    db.commit()
-    db.refresh(submission)
     return submission
 
 

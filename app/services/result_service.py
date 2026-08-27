@@ -18,6 +18,7 @@ def _student_attempt_count(db: Session, task_id: int, student_id: int) -> int:
         .filter(
             Submission.task_id == task_id,
             Submission.student_id == student_id,
+            Submission.status.in_(("evaluated", "failed")),
         )
         .count()
     )
@@ -109,6 +110,9 @@ def build_result_response(
         "table_json": submission.table_json,
 
         "status": submission.status,
+        "evaluation_status": submission.evaluation_status,
+        "evaluation_progress_percent": submission.evaluation_progress_percent,
+        "evaluation_attempts": submission.evaluation_attempts,
         "created_at": submission.created_at,
     }
 

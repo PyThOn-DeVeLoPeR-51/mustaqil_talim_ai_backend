@@ -3,6 +3,7 @@ from app.models.teacher import Teacher  # noqa
 from app.models.student import Student  # noqa
 from app.models.task import Task, TaskAssignment  # noqa
 from app.models.submission import Submission  # noqa
+from app.models.drawing_job import DrawingEvaluationJob  # noqa
 from app.models.ai_mentor import (  # noqa
     AIMentorChatMessage,
     AIMentorChatSession,

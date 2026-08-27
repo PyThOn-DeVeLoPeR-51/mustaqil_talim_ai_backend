@@ -86,6 +86,15 @@ class Settings(BaseSettings):
     RAG_JOB_RETRY_BASE_SECONDS: int = 10
     RAG_JOB_STALE_MINUTES: int = 20
 
+    # Durable DB-backed Drawing AI evaluation queue. Web process ichida default
+    # bitta worker ishlaydi; keyinchalik alohida worker service shu queue'ni
+    # PostgreSQL orqali xavfsiz consume qilishi mumkin.
+    DRAWING_BACKGROUND_WORKER_ENABLED: bool = True
+    DRAWING_WORKER_POLL_SECONDS: float = 1.0
+    DRAWING_JOB_MAX_ATTEMPTS: int = 3
+    DRAWING_JOB_RETRY_BASE_SECONDS: int = 10
+    DRAWING_JOB_STALE_MINUTES: int = 20
+
     # RAG embedding: PyTorch talab qilmaydigan lokal ONNX E5 modeli.
     # Default model 100 tilni qo‘llab-quvvatlaydi va 384-o‘lchamli vektor beradi.
     RAG_EMBEDDING_PROVIDER: str = "local_onnx_e5"

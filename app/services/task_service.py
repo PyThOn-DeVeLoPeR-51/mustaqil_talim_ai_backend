@@ -387,6 +387,7 @@ def is_reference_visible_for_student(db: Session, task_id: int, student_id: int,
         .filter(
             Submission.task_id == task_id,
             Submission.student_id == student_id,
+            Submission.status.in_(("evaluated", "failed")),
         )
         .count()
     )

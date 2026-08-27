@@ -5,6 +5,7 @@ from pydantic import BaseModel
 
 
 SubmissionStatus = Literal["pending", "evaluated", "failed"]
+EvaluationStatus = Literal["queued", "evaluating", "evaluated", "failed"]
 SubmissionMode = Literal["etalon", "optional"]
 
 
@@ -33,4 +34,7 @@ class ResultRead(BaseModel):
     table_json: list[dict[str, Any]] | None = None
 
     status: SubmissionStatus
+    evaluation_status: EvaluationStatus
+    evaluation_progress_percent: int = 0
+    evaluation_attempts: int = 0
     created_at: datetime

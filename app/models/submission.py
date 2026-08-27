@@ -2,9 +2,10 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import DateTime, Float, ForeignKey, Integer, JSON, String, UniqueConstraint, func
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.database import Base
+from app.models.drawing_job import DrawingEvaluationJob
 
 
 class Submission(Base):
@@ -45,6 +46,44 @@ class Submission(Base):
         server_default=func.now(),
         nullable=False,
     )
+
+
+    evaluation_job: Mapped[DrawingEvaluationJob | None] = relationship(
+        "DrawingEvaluationJob",
+        back_populates="submission",
+        uselist=False,
+        lazy="selectin",
+    )
+
+    @property
+    def evaluation_status(self) -> str:
+        job = self.evaluation_job
+        if job is not None:
+            if job.status == "pending":
+                return "queued"
+            if job.status == "running":
+                return "evaluating"
+            if job.status == "succeeded":
+                return "evaluated"
+            if job.status in {"failed", "cancelled"}:
+                return "failed"
+        if self.status == "evaluated":
+            return "evaluated"
+        if self.status == "failed":
+            return "failed"
+        return "queued"
+
+    @property
+    def evaluation_progress_percent(self) -> int:
+        job = self.evaluation_job
+        if job is not None:
+            return max(0, min(int(job.progress_percent or 0), 100))
+        return 100 if self.status in {"evaluated", "failed"} else 0
+
+    @property
+    def evaluation_attempts(self) -> int:
+        job = self.evaluation_job
+        return int(job.attempts or 0) if job is not None else 0
 
     __table_args__ = (
         UniqueConstraint(

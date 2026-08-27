@@ -9,6 +9,7 @@ from app.api.v1.api import api_router
 from app.core.config import settings
 from app.core.logging import configure_logging
 from app.rag.worker import RAGBackgroundWorker
+from app.drawing.worker import DrawingBackgroundWorker
 
 
 configure_logging()
@@ -16,16 +17,26 @@ configure_logging()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    worker: RAGBackgroundWorker | None = None
+    rag_worker: RAGBackgroundWorker | None = None
+    drawing_worker: DrawingBackgroundWorker | None = None
+
     if settings.RAG_BACKGROUND_WORKER_ENABLED:
-        worker = RAGBackgroundWorker()
-        await worker.start()
-        app.state.rag_worker = worker
+        rag_worker = RAGBackgroundWorker()
+        await rag_worker.start()
+        app.state.rag_worker = rag_worker
+
+    if settings.DRAWING_BACKGROUND_WORKER_ENABLED:
+        drawing_worker = DrawingBackgroundWorker()
+        await drawing_worker.start()
+        app.state.drawing_worker = drawing_worker
+
     try:
         yield
     finally:
-        if worker is not None:
-            await worker.stop()
+        if drawing_worker is not None:
+            await drawing_worker.stop()
+        if rag_worker is not None:
+            await rag_worker.stop()
 
 
 app = FastAPI(
