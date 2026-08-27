@@ -58,6 +58,7 @@ from app.services.drawing_job_service import (
     run_next_drawing_job_once,
 )
 from app.services.submission_service import create_submission_for_student
+from app.storage import delete_storage_object
 from app.storage.service import reset_storage_backend
 
 
@@ -232,6 +233,29 @@ class DrawingJobQueueTestCase(unittest.TestCase):
             .count(),
             140,
         )
+
+
+    def test_missing_storage_object_fails_without_retry(self) -> None:
+        submission = self._create_submission()
+        delete_storage_object(submission.uploaded_file_path)
+
+        run_next_drawing_job_once(
+            session_factory=self.factory,
+            worker_id="missing-object-worker",
+        )
+
+        self.db.expire_all()
+        job = (
+            self.db.query(DrawingEvaluationJob)
+            .filter(DrawingEvaluationJob.submission_id == submission.id)
+            .one()
+        )
+        current = self.db.get(Submission, submission.id)
+
+        self.assertEqual(job.status, "failed")
+        self.assertEqual(job.attempts, 1)
+        self.assertEqual(current.status, "failed")
+        self.assertIn("topilmadi", str(job.error_message).lower())
 
     def test_stale_running_job_is_requeued(self) -> None:
         submission = self._create_submission()

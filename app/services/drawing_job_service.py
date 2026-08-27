@@ -17,6 +17,7 @@ from app.models.submission import Submission
 from app.models.task import Task
 from app.services.submission_service import _evaluate_submission_from_storage
 from app.storage import delete_storage_prefix
+from app.storage.base import StorageObjectNotFound
 
 
 logger = logging.getLogger("app.drawing.jobs")
@@ -145,6 +146,8 @@ def _mark_job_failure(
     job: DrawingEvaluationJob,
     submission: Submission | None,
     exc: Exception,
+    *,
+    retryable: bool = True,
 ) -> DrawingEvaluationJob:
     now = utcnow()
     message = (str(exc) or exc.__class__.__name__)[:4000]
@@ -165,7 +168,7 @@ def _mark_job_failure(
     job.locked_at = None
     job.locked_by = None
 
-    if job.attempts < job.max_attempts:
+    if retryable and job.attempts < job.max_attempts:
         delay = settings.DRAWING_JOB_RETRY_BASE_SECONDS * (
             2 ** max(job.attempts - 1, 0)
         )
@@ -267,11 +270,17 @@ def execute_claimed_drawing_job(
             .filter(Submission.id == refreshed_job.submission_id)
             .first()
         )
+        # StorageObjectNotFound qayta urinish bilan tuzalmaydi: R2'dagi
+        # obyekt yo'q bo'lsa, jobni darhol terminal failed qilamiz. Bu
+        # deploy vaqtida legacy/pending submissionlar queue'ga backfill
+        # qilinganda keraksiz 10/20s retry shovqinini oldini oladi.
+        retryable = not isinstance(exc, StorageObjectNotFound)
         return _mark_job_failure(
             db,
             refreshed_job,
             refreshed_submission,
             exc,
+            retryable=retryable,
         )
 
 
